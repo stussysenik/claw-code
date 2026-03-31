@@ -3,8 +3,9 @@
 ## Table of Contents
 
 - [Principles](#principles)
-- [Generic OpenAI-Compatible](#generic-openai-compatible)
+- [Generic Or Custom OpenAI-Compatible](#generic-or-custom-openai-compatible)
 - [GLM Coding Plan](#glm-coding-plan)
+- [Kimi K2.5](#kimi-k25)
 - [NVIDIA NIM](#nvidia-nim)
 
 ## Principles
@@ -13,13 +14,14 @@
 - Do not rely on committed secret files.
 - `claw_code` only needs one OpenAI-compatible contract: base URL, API key, and model.
 
-## Generic OpenAI-Compatible
+## Generic Or Custom OpenAI-Compatible
 
 - Provider: `generic`
 - Env vars:
 - `CLAW_BASE_URL`
 - `CLAW_API_KEY`
 - `CLAW_MODEL`
+- Use this for self-hosted or custom OpenAI-compatible inference endpoints, including your own GLM-serving stack.
 - Smoke:
 
 ```bash
@@ -46,6 +48,25 @@ GLM_API_KEY="..." \
 GLM_MODEL="GLM-4.7" \
 ./scripts/qa.sh provider "say hello and report the configured provider"
 ```
+
+## Kimi K2.5
+
+- Provider: `kimi`
+- Default base URL: `https://api.moonshot.ai/v1`
+- Env vars:
+- `KIMI_API_KEY` or `MOONSHOT_API_KEY`
+- `KIMI_MODEL` default: `kimi-k2.5`
+- Optional overrides: `KIMI_BASE_URL`, `MOONSHOT_BASE_URL`
+- Smoke:
+
+```bash
+CLAW_PROVIDER=kimi \
+KIMI_API_KEY="..." \
+KIMI_MODEL="kimi-k2.5" \
+./scripts/qa.sh provider "say hello and report the configured provider"
+```
+
+Moonshot also publishes an Anthropic-compatible endpoint for upstream Claude Code itself, but `claw_code` uses the OpenAI-compatible Kimi endpoint above.
 
 ## NVIDIA NIM
 

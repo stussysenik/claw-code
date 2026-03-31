@@ -238,7 +238,7 @@ defmodule ClawCode.CLI do
       tools [--limit N] [--query TEXT] [--deny-tool NAME] [--deny-prefix PREFIX]
       route <prompt> [--limit N] [--native|--no-native]
       bootstrap <prompt> [--limit N] [--native|--no-native]
-      chat <prompt> [--provider glm|nim|generic] [--model MODEL] [--base-url URL] [--max-turns N] [--allow-shell] [--allow-write] [--native|--no-native]
+      chat <prompt> [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--max-turns N] [--allow-shell] [--allow-write] [--native|--no-native]
       symphony <prompt> [--limit N] [--native|--no-native]
       turn-loop <prompt> ...
       show-command <name>

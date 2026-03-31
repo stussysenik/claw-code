@@ -78,6 +78,14 @@ defmodule ClawCode.Providers.OpenAICompatible do
     }
   end
 
+  def required_env_vars("kimi") do
+    %{
+      base_url: ["KIMI_BASE_URL", "MOONSHOT_BASE_URL", "CLAW_BASE_URL"],
+      api_key: ["KIMI_API_KEY", "MOONSHOT_API_KEY", "CLAW_API_KEY"],
+      model: ["KIMI_MODEL", "MOONSHOT_MODEL", "CLAW_MODEL"]
+    }
+  end
+
   def required_env_vars(_provider) do
     %{
       base_url: ["CLAW_BASE_URL"],
@@ -88,6 +96,7 @@ defmodule ClawCode.Providers.OpenAICompatible do
 
   def default_base_url("glm"), do: "https://open.bigmodel.cn/api/coding/paas/v4"
   def default_base_url("nim"), do: "https://integrate.api.nvidia.com/v1"
+  def default_base_url("kimi"), do: "https://api.moonshot.ai/v1"
   def default_base_url(_provider), do: nil
 
   defp provider_base_url("glm") do
@@ -98,6 +107,11 @@ defmodule ClawCode.Providers.OpenAICompatible do
   defp provider_base_url("nim") do
     env("NIM_BASE_URL") || env("NVIDIA_BASE_URL") || env("CLAW_BASE_URL") ||
       default_base_url("nim")
+  end
+
+  defp provider_base_url("kimi") do
+    env("KIMI_BASE_URL") || env("MOONSHOT_BASE_URL") || env("CLAW_BASE_URL") ||
+      default_base_url("kimi")
   end
 
   defp provider_base_url(_provider) do
@@ -112,6 +126,10 @@ defmodule ClawCode.Providers.OpenAICompatible do
     env("NIM_API_KEY") || env("NVIDIA_API_KEY") || env("CLAW_API_KEY")
   end
 
+  defp provider_api_key("kimi") do
+    env("KIMI_API_KEY") || env("MOONSHOT_API_KEY") || env("CLAW_API_KEY")
+  end
+
   defp provider_api_key(_provider) do
     env("CLAW_API_KEY")
   end
@@ -123,6 +141,10 @@ defmodule ClawCode.Providers.OpenAICompatible do
   defp provider_model("nim") do
     env("NIM_MODEL") || env("NVIDIA_MODEL") || env("CLAW_MODEL") ||
       "meta/llama-3.1-8b-instruct"
+  end
+
+  defp provider_model("kimi") do
+    env("KIMI_MODEL") || env("MOONSHOT_MODEL") || env("CLAW_MODEL") || "kimi-k2.5"
   end
 
   defp provider_model(_provider) do

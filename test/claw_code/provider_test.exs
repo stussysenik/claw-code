@@ -51,6 +51,30 @@ defmodule ClawCode.ProviderTest do
     )
   end
 
+  test "kimi config uses the official moonshot endpoint and default model" do
+    with_env(
+      %{
+        "KIMI_BASE_URL" => nil,
+        "MOONSHOT_BASE_URL" => nil,
+        "CLAW_BASE_URL" => nil,
+        "KIMI_MODEL" => nil,
+        "MOONSHOT_MODEL" => nil,
+        "CLAW_MODEL" => nil,
+        "KIMI_API_KEY" => "kimi-test-key",
+        "MOONSHOT_API_KEY" => nil,
+        "CLAW_API_KEY" => nil
+      },
+      fn ->
+        config = OpenAICompatible.resolve_config(provider: "KIMI")
+
+        assert config.provider == "kimi"
+        assert config.base_url == "https://api.moonshot.ai/v1"
+        assert config.model == "kimi-k2.5"
+        assert config.api_key == "kimi-test-key"
+      end
+    )
+  end
+
   defp with_env(overrides, fun) do
     previous =
       Enum.into(overrides, %{}, fn {key, _value} -> {key, System.get_env(key)} end)

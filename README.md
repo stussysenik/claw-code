@@ -17,7 +17,7 @@
 - Elixir is the control plane.
 - Zig stays behind a narrow executable boundary.
 - Python, Lua, and Common Lisp stay as adapters, not core dependencies.
-- GLM and NVIDIA NIM stay behind one OpenAI-compatible provider boundary.
+- GLM, Kimi, and NVIDIA NIM stay behind one OpenAI-compatible provider boundary.
 - OMX is the planning and execution layer, not the shipped runtime.
 
 ## Canonical Operator Layer
@@ -98,7 +98,7 @@ The release lane generates tags, updates `CHANGELOG.md`, and publishes GitHub Re
 - `lib/` contains the OTP application, CLI, session store, routing, and symphony-style orchestration.
 - `native/` contains the isolated Zig helper boundary.
 - `docs/` contains backlog and execution-plan material.
-- `docs/providers.md` records the provider env contract for `generic`, `glm`, and `nim`.
+- `docs/providers.md` records the provider env contract for `generic`, `glm`, `kimi`, and `nim`.
 - `.omx/` contains the operator board, team split, checklists, and mission briefs.
 - `scripts/` contains the canonical Ralph loops, QA dispatcher, and validation gate.
 - `progress.md` is the append-only UTC ledger for workflow progress.

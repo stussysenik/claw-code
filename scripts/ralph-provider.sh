@@ -17,8 +17,11 @@ provider_env_present() {
     nim)
       require_env_any "nim" NIM_API_KEY NVIDIA_API_KEY CLAW_API_KEY
       ;;
+    kimi)
+      require_env_any "kimi" KIMI_API_KEY MOONSHOT_API_KEY CLAW_API_KEY
+      ;;
     *)
-      require_env_any "generic provider" CLAW_API_KEY GLM_API_KEY BIGMODEL_API_KEY NIM_API_KEY NVIDIA_API_KEY
+      require_env_any "generic provider" CLAW_API_KEY GLM_API_KEY BIGMODEL_API_KEY NIM_API_KEY NVIDIA_API_KEY KIMI_API_KEY MOONSHOT_API_KEY
       ;;
   esac
 }
