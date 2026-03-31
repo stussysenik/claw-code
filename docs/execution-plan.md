@@ -5,6 +5,7 @@
 - [Objective](#objective)
 - [Team Topology](#team-topology)
 - [Phase Plan](#phase-plan)
+- [OpenSpec Roadmap](#openspec-roadmap)
 - [Daemon Proposal](#daemon-proposal)
 - [Architecture Reference](#architecture-reference)
 - [Git And Release Discipline](#git-and-release-discipline)
@@ -48,6 +49,8 @@ Turn `claw_code` into a learning repo and a durable coding runtime: small codeba
 
 ## Phase Plan
 
+This file stays intentionally coarse. The detailed daily-driver plan and remaining phase criteria now live in `openspec/changes/reach-daily-driver/`.
+
 ### Phase 0: Repo Operating System
 
 - Commit the engineering standards into `AGENTS.md`.
@@ -88,6 +91,19 @@ Turn `claw_code` into a learning repo and a durable coding runtime: small codeba
 - Add resilient startup, stale-daemon detection, and crash recovery so a dead control plane fails closed instead of silently losing session state.
 - Make future multi-client control an extension of the same daemon contract, not a separate subsystem.
 - Initial slice status: local daemon lifecycle plus daemon-backed `chat` and `cancel-session` are implemented behind tests; next work is hardening the background path and widening replay/inspection semantics.
+
+## OpenSpec Roadmap
+
+Use the OpenSpec layer when you need the full remaining path to daily-driver status:
+
+- [openspec/README.md](../openspec/README.md)
+- [openspec/project.md](../openspec/project.md)
+- [openspec/changes/reach-daily-driver/proposal.md](../openspec/changes/reach-daily-driver/proposal.md)
+- [openspec/changes/reach-daily-driver/design.md](../openspec/changes/reach-daily-driver/design.md)
+- [openspec/changes/reach-daily-driver/tasks.md](../openspec/changes/reach-daily-driver/tasks.md)
+- [openspec/changes/reach-daily-driver/specs/daily-driver/spec.md](../openspec/changes/reach-daily-driver/specs/daily-driver/spec.md)
+
+The phase plan above explains the coarse execution order. OpenSpec carries the sharper daily-driver bar, parallel-lane split, and remaining task checklist.
 
 ## Daemon Proposal
 

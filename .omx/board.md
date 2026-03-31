@@ -18,6 +18,7 @@
 ## Operator Notes
 
 - Start with one lane at a time unless OMX `$team` is coordinating the split explicitly.
+- Use `openspec/changes/reach-daily-driver/` as the canonical phase map for the remaining daily-driver work.
 - Do not expand shell or write capability without tests and receipts.
 - Treat the requirements ledger as a blocking reliability feature, not optional polish.
 - Use `scripts/qa.sh` as the canonical dispatcher for validation and lane-specific gates.

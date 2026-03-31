@@ -10,6 +10,7 @@
 - [What Lives Here](#what-lives-here)
 - [Architecture Reference](#architecture-reference)
 - [Canonical Operator Layer](#canonical-operator-layer)
+- [OpenSpec Roadmap](#openspec-roadmap)
 - [Working Commands](#working-commands)
 - [Session Resume](#session-resume)
 - [Persistent Control Plane](#persistent-control-plane)
@@ -56,6 +57,19 @@ The right way to think about this repo is: `claw_code` is Elixir-first with a sm
 - [.github/workflows/ci.yml](./.github/workflows/ci.yml)
 - [.github/workflows/release.yml](./.github/workflows/release.yml)
 - [CHANGELOG.md](./CHANGELOG.md)
+
+## OpenSpec Roadmap
+
+OpenSpec now holds the canonical "what is left until this is a daily driver?" plan.
+
+- [openspec/README.md](./openspec/README.md)
+- [openspec/project.md](./openspec/project.md)
+- [openspec/changes/reach-daily-driver/proposal.md](./openspec/changes/reach-daily-driver/proposal.md)
+- [openspec/changes/reach-daily-driver/design.md](./openspec/changes/reach-daily-driver/design.md)
+- [openspec/changes/reach-daily-driver/tasks.md](./openspec/changes/reach-daily-driver/tasks.md)
+- [openspec/changes/reach-daily-driver/specs/daily-driver/spec.md](./openspec/changes/reach-daily-driver/specs/daily-driver/spec.md)
+
+The OpenSpec layer defines the daily-driver bar and the remaining phases. `.omx/board.md` and the Ralph loops remain the execution surface.
 
 ## Working Commands
 

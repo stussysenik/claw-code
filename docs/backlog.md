@@ -20,6 +20,7 @@ See also:
 - `docs/reference/architecture.md` for the canonical Elixir/Zig boundary
 - `.omx/board.md` for execution tracking
 - `docs/execution-plan.md` for phase sequencing
+- `openspec/changes/reach-daily-driver/` for the remaining daily-driver roadmap
 - `progress.md` for the UTC workflow ledger
 
 ## Design Constraints
