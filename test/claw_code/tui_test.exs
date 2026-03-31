@@ -59,7 +59,7 @@ defmodule ClawCode.TUITest do
     assert output =~ "selected=1/1"
     assert output =~ "runs=running:0 completed:1 failed:0"
     assert output =~ "filter=all limit=8 query=-"
-    assert output =~ "watch=off"
+    assert output =~ "watch=off follow=off"
     assert output =~ "transcript_query=- hit=-"
     assert output =~ "selected_run=idle last_stop=completed"
     assert output =~ "selected_receipt=none"
@@ -154,6 +154,67 @@ defmodule ClawCode.TUITest do
     {:continue, invalid_state} = TUI.apply_command(off_state, "watch nope")
     assert invalid_state.watch_interval_ms == nil
     assert invalid_state.notice =~ "positive integer"
+  end
+
+  test "follow command updates tracked target" do
+    state = %State{
+      opts: [provider: "generic"],
+      daemon_status: %{"status" => "running"},
+      doctor: %{provider: "generic", model: %{value: "test-model"}, tool_policy: :auto},
+      all_sessions: [],
+      sessions: [],
+      session_filter: :all,
+      session_limit: 8,
+      session_root: System.tmp_dir!(),
+      selected_session_id: nil,
+      selected_session: nil
+    }
+
+    {:continue, follow_state} = TUI.apply_command(state, "follow running")
+    assert follow_state.follow_target == "running"
+    assert follow_state.notice =~ "Follow set to running"
+    assert TUI.render(follow_state) =~ "follow=running"
+
+    {:continue, off_state} = TUI.apply_command(follow_state, "follow off")
+    assert off_state.follow_target == nil
+    assert off_state.notice =~ "Follow disabled"
+  end
+
+  test "refresh follows the running session target when one appears" do
+    root = Path.join(System.tmp_dir!(), "claw-code-tui-follow-#{SessionStore.new_id()}")
+    File.rm_rf(root)
+
+    on_exit(fn -> File.rm_rf(root) end)
+
+    SessionStore.save(%{id: "session-completed", stop_reason: "completed", messages: []},
+      root: root
+    )
+
+    state =
+      TUI.build_state(
+        [provider: "generic"],
+        %{"status" => "running", "session_root" => root},
+        nil
+      )
+
+    {:continue, follow_state} = TUI.apply_command(state, "follow running")
+    assert follow_state.follow_target == "running"
+    assert follow_state.selected_session_id == "session-completed"
+
+    SessionStore.save(
+      %{
+        id: "session-running",
+        stop_reason: "running",
+        run_state: %{"status" => "running", "started_at" => "2026-03-31T23:20:00Z"},
+        messages: [%{"role" => "assistant", "content" => "still working"}]
+      },
+      root: root
+    )
+
+    {:continue, refreshed_state} = TUI.apply_command(follow_state, "refresh")
+    assert refreshed_state.follow_target == "running"
+    assert refreshed_state.selected_session_id == "session-running"
+    assert refreshed_state.selected_session["id"] == "session-running"
   end
 
   test "open command selects a session by index" do

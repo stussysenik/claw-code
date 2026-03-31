@@ -14,6 +14,7 @@ defmodule ClawCode.TUI do
               session_limit: 8,
               session_root: nil,
               watch_interval_ms: nil,
+              follow_target: nil,
               transcript_query: nil,
               transcript_match_index: 0,
               selected_session_id: nil,
@@ -40,6 +41,7 @@ defmodule ClawCode.TUI do
       normalize_session_query(Map.get(ui, :session_query, Keyword.get(opts, :query)))
 
     watch_interval_ms = normalize_watch_interval(Map.get(ui, :watch_interval_ms))
+    follow_target = normalize_follow_target(Map.get(ui, :follow_target))
     transcript_query = normalize_transcript_query(Map.get(ui, :transcript_query))
     transcript_match_index = Map.get(ui, :transcript_match_index, 0)
 
@@ -59,12 +61,14 @@ defmodule ClawCode.TUI do
       session_limit: session_limit,
       session_root: session_root,
       watch_interval_ms: watch_interval_ms,
+      follow_target: follow_target,
       transcript_query: transcript_query,
       transcript_match_index: transcript_match_index,
       selected_session_id: selected_session_id,
       selected_session: selected_session,
       notice: notice
     }
+    |> apply_follow_target()
     |> normalize_transcript_state()
   end
 
@@ -108,6 +112,9 @@ defmodule ClawCode.TUI do
 
       <<"watch ", value::binary>> ->
         set_watch_interval(state, value)
+
+      <<"follow ", value::binary>> ->
+        set_follow_target(state, value)
 
       "clear find-msg" ->
         clear_transcript_query(state)
@@ -167,7 +174,7 @@ defmodule ClawCode.TUI do
       "base_url=#{nested_value(state.doctor, [:base_url, :value]) || "missing"} selected=#{selected_session_position(state)}",
       "runs=running:#{count_sessions(state.all_sessions, &session_running?/1)} completed:#{count_sessions(state.all_sessions, &session_completed?/1)} failed:#{count_sessions(state.all_sessions, &session_failed?/1)}",
       "sessions=#{length(state.sessions)}/#{length(state.all_sessions)} filter=#{state.session_filter} limit=#{state.session_limit} query=#{state.session_query || "-"}",
-      "watch=#{watch_label(state.watch_interval_ms)}",
+      "watch=#{watch_label(state.watch_interval_ms)} follow=#{state.follow_target || "off"}",
       "transcript_query=#{state.transcript_query || "-"} hit=#{selected_transcript_hit_position(state)}",
       "selected_run=#{selected_run_summary(state.selected_session)}",
       "selected_receipt=#{selected_receipt_summary(state.selected_session)}",
@@ -181,7 +188,7 @@ defmodule ClawCode.TUI do
       render_selected_session(state),
       "",
       "## Commands",
-      "chat <prompt> | resume <prompt> | resume <n|id|latest|running|completed|failed> <prompt> | open <n|id|latest|latest-running|latest-completed|running|completed|failed> | filter <all|running|completed|failed> | find <substring> | clear find | watch <seconds|on|off> | find-msg <substring> | clear find-msg | next-hit | prev-hit | limit <n> | next | prev | cancel | provider <name|default> | model <name|default> | base-url <url> | clear base-url | tools auto|on|off | probe | refresh | help | quit"
+      "chat <prompt> | resume <prompt> | resume <n|id|latest|running|completed|failed> <prompt> | open <n|id|latest|latest-running|latest-completed|running|completed|failed> | filter <all|running|completed|failed> | find <substring> | clear find | watch <seconds|on|off> | follow <latest|running|latest-running|completed|failed|off> | find-msg <substring> | clear find-msg | next-hit | prev-hit | limit <n> | next | prev | cancel | provider <name|default> | model <name|default> | base-url <url> | clear base-url | tools auto|on|off | probe | refresh | help | quit"
     ]
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join("\n")
@@ -238,6 +245,7 @@ defmodule ClawCode.TUI do
       state.opts
       |> build_state(refresh_daemon_status(state), notice, ui_state(state))
       |> preserve_selection(state.selected_session_id)
+      |> apply_follow_target()
       |> normalize_transcript_state()
 
     {:continue, next_state}
@@ -543,6 +551,21 @@ defmodule ClawCode.TUI do
     end
   end
 
+  defp set_follow_target(%State{} = state, value) do
+    case parse_follow_value(value) do
+      {:ok, follow_target, notice} ->
+        next_state =
+          %{state | follow_target: follow_target, notice: notice}
+          |> apply_follow_target()
+          |> normalize_transcript_state()
+
+        {:continue, next_state}
+
+      {:error, message} ->
+        {:continue, %{state | notice: message}}
+    end
+  end
+
   defp set_transcript_query(%State{} = state, value) do
     transcript_query = normalize_transcript_query(value)
 
@@ -608,6 +631,7 @@ defmodule ClawCode.TUI do
       opts
       |> build_state(refresh_daemon_status(%{state | opts: opts}), notice, ui_state(state))
       |> preserve_selection(state.selected_session_id)
+      |> apply_follow_target()
       |> normalize_transcript_state()
 
     {:continue, next_state}
@@ -619,6 +643,7 @@ defmodule ClawCode.TUI do
       session_query: state.session_query,
       session_limit: state.session_limit || 8,
       watch_interval_ms: state.watch_interval_ms,
+      follow_target: state.follow_target,
       transcript_query: state.transcript_query,
       transcript_match_index: state.transcript_match_index || 0
     }
@@ -633,6 +658,24 @@ defmodule ClawCode.TUI do
     case SessionStore.fetch(session_id, root: root) do
       {:ok, session} -> session
       :error -> nil
+    end
+  end
+
+  defp apply_follow_target(%State{follow_target: nil} = state), do: state
+
+  defp apply_follow_target(%State{} = state) do
+    case resolve_session_id(state.follow_target, state.sessions, state.all_sessions) do
+      nil ->
+        state
+
+      session_id ->
+        case fetch_session(session_id, state.session_root) do
+          nil ->
+            state
+
+          session ->
+            %{state | selected_session_id: session_id, selected_session: session}
+        end
     end
   end
 
@@ -662,11 +705,11 @@ defmodule ClawCode.TUI do
         first_matching_session_id(all_sessions, &session_failed?/1)
 
       _other ->
-        resolve_index_or_id(value, sessions)
+        resolve_index_or_id(value, sessions, all_sessions)
     end
   end
 
-  defp resolve_index_or_id(value, sessions) do
+  defp resolve_index_or_id(value, sessions, all_sessions) do
     case Integer.parse(value) do
       {index, ""} ->
         sessions
@@ -677,7 +720,7 @@ defmodule ClawCode.TUI do
         end
 
       _other ->
-        if Enum.any?(sessions, &(&1["id"] == value)), do: value, else: nil
+        if Enum.any?(all_sessions, &(&1["id"] == value)), do: value, else: nil
     end
   end
 
@@ -833,7 +876,7 @@ defmodule ClawCode.TUI do
   end
 
   defp help_text do
-    "Commands: chat <prompt>, resume <prompt>, resume <n|id|latest|running|completed|failed> <prompt>, open <n|id|latest|latest-running|latest-completed|running|completed|failed>, filter <all|running|completed|failed>, find <substring>, clear find, watch <seconds|on|off>, find-msg <substring>, clear find-msg, next-hit, prev-hit, limit <n>, next, prev, cancel, provider <name|default>, model <name|default>, base-url <url>, clear base-url, tools auto|on|off, probe, refresh, help, quit"
+    "Commands: chat <prompt>, resume <prompt>, resume <n|id|latest|running|completed|failed> <prompt>, open <n|id|latest|latest-running|latest-completed|running|completed|failed>, filter <all|running|completed|failed>, find <substring>, clear find, watch <seconds|on|off>, follow <latest|running|latest-running|completed|failed|off>, find-msg <substring>, clear find-msg, next-hit, prev-hit, limit <n>, next, prev, cancel, provider <name|default>, model <name|default>, base-url <url>, clear base-url, tools auto|on|off, probe, refresh, help, quit"
   end
 
   defp step_session(%State{sessions: []} = state, _offset) do
@@ -934,6 +977,33 @@ defmodule ClawCode.TUI do
   defp normalize_watch_interval(value) when is_integer(value) and value > 0, do: value
   defp normalize_watch_interval(_value), do: nil
 
+  defp normalize_follow_target(nil), do: nil
+
+  defp normalize_follow_target(value) when is_binary(value) do
+    case String.trim(value) do
+      "" ->
+        nil
+
+      target ->
+        normalized = String.downcase(target)
+
+        if normalized in [
+             "latest",
+             "running",
+             "latest-running",
+             "completed",
+             "latest-completed",
+             "failed",
+             "latest-failed",
+             "off"
+           ] do
+          normalized
+        else
+          target
+        end
+    end
+  end
+
   defp parse_watch_value(value) do
     case String.trim(String.downcase(value)) do
       "" ->
@@ -958,6 +1028,19 @@ defmodule ClawCode.TUI do
 
   defp watch_label(nil), do: "off"
   defp watch_label(interval_ms), do: "#{div(interval_ms, 1_000)}s"
+
+  defp parse_follow_value(value) do
+    case normalize_follow_target(value) do
+      nil ->
+        {:error, "Follow target is required."}
+
+      "off" ->
+        {:ok, nil, "Follow disabled."}
+
+      target ->
+        {:ok, target, "Follow set to #{target}."}
+    end
+  end
 
   defp normalize_transcript_query(nil), do: nil
 
