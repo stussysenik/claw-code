@@ -1,5 +1,6 @@
 defmodule ClawCode.TUI do
   alias ClawCode.{Daemon, Manifest, SessionStore}
+  alias ClawCode.Providers.OpenAICompatible
 
   defmodule State do
     @enforce_keys [:opts]
@@ -67,6 +68,12 @@ defmodule ClawCode.TUI do
       "cancel" ->
         cancel_selected(state)
 
+      "next" ->
+        step_session(state, 1)
+
+      "prev" ->
+        step_session(state, -1)
+
       <<"open ", rest::binary>> ->
         open_session(state, rest)
 
@@ -75,6 +82,18 @@ defmodule ClawCode.TUI do
 
       <<"resume ", prompt::binary>> ->
         send_chat(state, prompt, true)
+
+      <<"provider ", provider::binary>> ->
+        set_provider(state, provider)
+
+      <<"model ", model::binary>> ->
+        set_model(state, model)
+
+      <<"base-url ", base_url::binary>> ->
+        set_base_url(state, base_url)
+
+      "clear base-url" ->
+        clear_base_url(state)
 
       <<"tools ", mode::binary>> ->
         set_tool_mode(state, mode)
@@ -88,7 +107,8 @@ defmodule ClawCode.TUI do
     [
       "# Claw Code TUI",
       "",
-      "daemon=#{state.daemon_status["status"] || "unknown"} provider=#{state.doctor.provider} model=#{state.doctor.model.value || "missing"} tools=#{state.doctor.tool_policy}",
+      "daemon=#{state.daemon_status["status"] || "unknown"} provider=#{state.doctor[:provider] || "unknown"} model=#{nested_value(state.doctor, [:model, :value]) || "missing"} tools=#{state.doctor[:tool_policy] || :auto}",
+      "base_url=#{nested_value(state.doctor, [:base_url, :value]) || "missing"} selected=#{selected_session_position(state)}",
       "session_root=#{state.session_root}",
       if(state.notice, do: "notice=#{state.notice}"),
       "",
@@ -99,7 +119,7 @@ defmodule ClawCode.TUI do
       render_selected_session(state.selected_session),
       "",
       "## Commands",
-      "chat <prompt> | resume <prompt> | open <n|id> | cancel | tools auto|on|off | refresh | help | quit"
+      "chat <prompt> | resume <prompt> | open <n|id> | next | prev | cancel | provider <name|default> | model <name|default> | base-url <url> | clear base-url | tools auto|on|off | refresh | help | quit"
     ]
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join("\n")
@@ -250,6 +270,62 @@ defmodule ClawCode.TUI do
     end
   end
 
+  defp set_provider(%State{} = state, value) do
+    provider =
+      value
+      |> String.trim()
+      |> String.downcase()
+
+    cond do
+      provider in ["", "default"] ->
+        rebuild_with_opts(
+          state,
+          Keyword.delete(state.opts, :provider),
+          "Provider reset to default."
+        )
+
+      OpenAICompatible.valid_provider?(provider) ->
+        rebuild_with_opts(
+          state,
+          Keyword.put(state.opts, :provider, provider),
+          "Provider set to #{provider}."
+        )
+
+      true ->
+        {:continue, %{state | notice: "Unknown provider: #{provider}"}}
+    end
+  end
+
+  defp set_model(%State{} = state, value) do
+    model = String.trim(value)
+
+    cond do
+      model in ["", "default"] ->
+        rebuild_with_opts(state, Keyword.delete(state.opts, :model), "Model reset to default.")
+
+      true ->
+        rebuild_with_opts(state, Keyword.put(state.opts, :model, model), "Model set to #{model}.")
+    end
+  end
+
+  defp set_base_url(%State{} = state, value) do
+    base_url = String.trim(value)
+
+    if base_url == "" do
+      {:continue, %{state | notice: "Base URL is required."}}
+    else
+      rebuild_with_opts(
+        state,
+        Keyword.put(state.opts, :base_url, base_url),
+        "Base URL set to #{base_url}."
+      )
+    end
+  end
+
+  defp clear_base_url(%State{} = state) do
+    rebuild_with_opts(state, Keyword.delete(state.opts, :base_url), "Base URL cleared.")
+  end
+
   defp rebuild_with_opts(%State{} = state, opts, notice) do
     next_state =
       opts
@@ -344,8 +420,48 @@ defmodule ClawCode.TUI do
   end
 
   defp help_text do
-    "Commands: chat <prompt>, resume <prompt>, open <n|id>, cancel, tools auto|on|off, refresh, help, quit"
+    "Commands: chat <prompt>, resume <prompt>, open <n|id>, next, prev, cancel, provider <name|default>, model <name|default>, base-url <url>, clear base-url, tools auto|on|off, refresh, help, quit"
   end
+
+  defp step_session(%State{sessions: []} = state, _offset) do
+    {:continue, %{state | notice: "No sessions available."}}
+  end
+
+  defp step_session(%State{} = state, offset) do
+    current_index =
+      state.sessions
+      |> Enum.find_index(&(&1["id"] == state.selected_session_id))
+      |> Kernel.||(0)
+
+    next_index = current_index + offset
+
+    cond do
+      next_index < 0 ->
+        {:continue, %{state | notice: "Already at the first session."}}
+
+      next_index >= length(state.sessions) ->
+        {:continue, %{state | notice: "Already at the last session."}}
+
+      true ->
+        session = Enum.at(state.sessions, next_index)
+        open_session(state, session["id"])
+    end
+  end
+
+  defp selected_session_position(%State{sessions: []}), do: "none"
+
+  defp selected_session_position(%State{} = state) do
+    case Enum.find_index(state.sessions, &(&1["id"] == state.selected_session_id)) do
+      nil -> "none"
+      index -> "#{index + 1}/#{length(state.sessions)}"
+    end
+  end
+
+  defp nested_value(map, keys) when is_map(map) do
+    get_in(map, keys)
+  end
+
+  defp nested_value(_value, _keys), do: nil
 
   defp summarize(nil), do: ""
 

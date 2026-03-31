@@ -31,6 +31,8 @@ It stays intentionally small:
 - recent session list
 - selected transcript and receipts
 - daemon-backed `chat` and `resume`
+- in-client `provider`, `model`, and `base-url` switching, including reset-to-default
+- `next` and `prev` session navigation
 - explicit `tools auto|on|off`
 - `open`, `cancel`, `refresh`, `help`, and `quit`
 
