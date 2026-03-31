@@ -1,5 +1,5 @@
 defmodule ClawCode.Manifest do
-  alias ClawCode.{Host, NativeRanker, Registry, SessionStore}
+  alias ClawCode.{Host, NativeRanker, Registry, Runtime, SessionStore}
   alias ClawCode.Providers.OpenAICompatible
 
   def render_summary do
@@ -58,6 +58,7 @@ defmodule ClawCode.Manifest do
       "- common_lisp: #{runtime_engine(:common_lisp)}",
       "- provider: #{config.provider}",
       "- configured: #{diagnostics.configured}",
+      "- tool_policy: #{Runtime.tool_policy(opts)}",
       "- request_url: #{diagnostics.request_url || "missing"}",
       "- base_url: #{config.base_url || "missing"} (#{diagnostics.fields.base_url.source})",
       "- api_key: #{mask(config.api_key)} (#{diagnostics.fields.api_key.source})",

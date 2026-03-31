@@ -403,6 +403,18 @@ defmodule ClawCode.Runtime do
     ]
   end
 
+  def tool_policy(opts \\ []) do
+    case requested_tool_policy(opts) do
+      nil ->
+        System.get_env("CLAW_TOOL_MODE")
+        |> normalize_tool_policy()
+        |> Kernel.||(:auto)
+
+      policy ->
+        policy
+    end
+  end
+
   defp tool_specs_for_prompt(prompt, matches, opts) do
     if expose_tools?(prompt, matches, opts) do
       Builtin.specs(opts)
@@ -412,18 +424,52 @@ defmodule ClawCode.Runtime do
   end
 
   defp expose_tools?(prompt, _matches, opts) do
-    if Keyword.get(opts, :allow_shell, false) or Keyword.get(opts, :allow_write, false) do
-      true
-    else
-      prompt_text = String.downcase(prompt || "")
+    case tool_policy(opts) do
+      :enabled ->
+        true
 
-      keyword_match? =
-        Regex.match?(
-          ~r/\b(repo|repository|project|file|files|path|read|inspect|review|search|list|command|tool|terminal|shell|write|edit|fix|refactor|test|build|compile|session)\b/,
-          prompt_text
-        )
+      :disabled ->
+        false
 
-      keyword_match?
+      :auto ->
+        if Keyword.get(opts, :allow_shell, false) or Keyword.get(opts, :allow_write, false) do
+          true
+        else
+          prompt_text = String.downcase(prompt || "")
+
+          Regex.match?(
+            ~r/\b(repo|repository|project|file|files|path|read|inspect|review|search|list|command|tool|terminal|shell|write|edit|fix|refactor|test|build|compile|session)\b/,
+            prompt_text
+          )
+        end
+    end
+  end
+
+  defp requested_tool_policy(opts) do
+    cond do
+      Keyword.get(opts, :tools) == true -> :enabled
+      Keyword.get(opts, :tools) == false -> :disabled
+      true -> nil
+    end
+  end
+
+  defp normalize_tool_policy(nil), do: nil
+
+  defp normalize_tool_policy(value) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() do
+      "1" -> :enabled
+      "true" -> :enabled
+      "on" -> :enabled
+      "enable" -> :enabled
+      "enabled" -> :enabled
+      "force" -> :enabled
+      "0" -> :disabled
+      "false" -> :disabled
+      "off" -> :disabled
+      "disable" -> :disabled
+      "disabled" -> :disabled
+      "auto" -> :auto
+      _other -> nil
     end
   end
 

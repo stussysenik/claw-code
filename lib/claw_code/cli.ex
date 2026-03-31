@@ -25,6 +25,8 @@ defmodule ClawCode.CLI do
     max_turns: :integer,
     allow_shell: :boolean,
     allow_write: :boolean,
+    tools: :boolean,
+    no_tools: :boolean,
     show_messages: :boolean,
     show_receipts: :boolean,
     daemon: :boolean,
@@ -629,6 +631,7 @@ defmodule ClawCode.CLI do
 
   defp normalize_opts(opts) do
     opts
+    |> normalize_inverse_flag(:tools, :no_tools)
     |> normalize_inverse_flag(:native, :no_native)
     |> normalize_inverse_flag(:daemon, :no_daemon)
   end
@@ -662,7 +665,7 @@ defmodule ClawCode.CLI do
     Commands:
       summary
       manifest
-      doctor [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY]
+      doctor [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--tools|--no-tools]
       daemon serve [--daemon-root PATH] [--session-root PATH]
       daemon start [--daemon-root PATH] [--session-root PATH]
       daemon status [--daemon-root PATH]
@@ -672,8 +675,8 @@ defmodule ClawCode.CLI do
       tools [--limit N] [--query TEXT] [--deny-tool NAME] [--deny-prefix PREFIX]
       route <prompt> [--limit N] [--native|--no-native]
       bootstrap <prompt> [--limit N] [--native|--no-native]
-      chat <prompt> [--daemon] [--session-id ID] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--max-turns N] [--allow-shell] [--allow-write] [--native|--no-native] [--session-root PATH] [--daemon-root PATH]
-      resume-session <session_id> <prompt> [--daemon] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--max-turns N] [--allow-shell] [--allow-write] [--native|--no-native] [--session-root PATH] [--daemon-root PATH]
+      chat <prompt> [--daemon] [--session-id ID] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--max-turns N] [--allow-shell] [--allow-write] [--tools|--no-tools] [--native|--no-native] [--session-root PATH] [--daemon-root PATH]
+      resume-session <session_id> <prompt> [--daemon] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--max-turns N] [--allow-shell] [--allow-write] [--tools|--no-tools] [--native|--no-native] [--session-root PATH] [--daemon-root PATH]
       cancel-session <session_id> [--daemon] [--session-root PATH] [--daemon-root PATH]
       symphony <prompt> [--limit N] [--native|--no-native]
       turn-loop <prompt> ...

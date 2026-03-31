@@ -28,6 +28,24 @@ defmodule ClawCode.CLITest do
     assert output =~ "- api_key: tes**key"
   end
 
+  test "doctor renders explicit tool policy" do
+    output =
+      capture_io(fn ->
+        assert CLI.run(["doctor", "--provider", "generic", "--no-tools"]) == 0
+      end)
+
+    assert output =~ "- tool_policy: disabled"
+  end
+
+  test "chat accepts explicit tool policy flags" do
+    output =
+      capture_io(fn ->
+        assert CLI.run(["chat", "--no-tools", "--provider", "generic", "hello"]) == 1
+      end)
+
+    assert output =~ "Stop reason: missing_provider_config"
+  end
+
   test "daemon status reports stopped when no daemon is running" do
     daemon_root =
       Path.join(System.tmp_dir!(), "claw-code-cli-daemon-status-#{SessionStore.new_id()}")
@@ -405,6 +423,102 @@ defmodule ClawCode.CLITest do
     assert output =~ "daemon reply"
   end
 
+  test "daemon chat forwards explicit no-tools policy" do
+    session_root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-daemon-tools-#{SessionStore.new_id()}")
+
+    daemon_root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-daemon-tools-meta-#{SessionStore.new_id()}")
+
+    previous_session_root = Application.get_env(:claw_code, :session_root)
+    previous_daemon_root = Application.get_env(:claw_code, :daemon_root)
+
+    on_exit(fn ->
+      if is_nil(previous_session_root) do
+        Application.delete_env(:claw_code, :session_root)
+      else
+        Application.put_env(:claw_code, :session_root, previous_session_root)
+      end
+
+      if is_nil(previous_daemon_root) do
+        Application.delete_env(:claw_code, :daemon_root)
+      else
+        Application.put_env(:claw_code, :daemon_root, previous_daemon_root)
+      end
+
+      case Daemon.stop(daemon_root: daemon_root) do
+        {:ok, _result} -> :ok
+        _other -> :ok
+      end
+
+      File.rm_rf(session_root)
+      File.rm_rf(daemon_root)
+    end)
+
+    Application.put_env(:claw_code, :session_root, session_root)
+    Application.put_env(:claw_code, :daemon_root, daemon_root)
+    File.rm_rf(session_root)
+    File.rm_rf(daemon_root)
+
+    {base_url, listener, server} =
+      start_stub_server(
+        [
+          Jason.encode!(%{
+            "choices" => [
+              %{
+                "message" => %{
+                  "role" => "assistant",
+                  "content" => "daemon no-tools reply"
+                }
+              }
+            ]
+          })
+        ],
+        capture_requests: true
+      )
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    {:ok, daemon_task} =
+      Task.start_link(fn ->
+        Daemon.serve(daemon_root: daemon_root)
+      end)
+
+    on_exit(fn ->
+      if Process.alive?(daemon_task), do: Process.exit(daemon_task, :kill)
+    end)
+
+    assert wait_until(fn ->
+             match?({:ok, %{"status" => "running"}}, Daemon.status(daemon_root: daemon_root))
+           end)
+
+    output =
+      capture_io(fn ->
+        assert CLI.run([
+                 "chat",
+                 "--daemon",
+                 "--provider",
+                 "generic",
+                 "--base-url",
+                 base_url,
+                 "--api-key",
+                 "test-key",
+                 "--model",
+                 "test-model",
+                 "--no-tools",
+                 "inspect the repo and list relevant files"
+               ]) == 0
+      end)
+
+    assert output =~ "Stop reason: completed"
+    assert output =~ "daemon no-tools reply"
+    assert_receive {:request, request}, 1_000
+    refute request =~ "\"tools\""
+  end
+
   test "resume-session can use the daemon transport" do
     session_root =
       Path.join(System.tmp_dir!(), "claw-code-cli-daemon-resume-#{SessionStore.new_id()}")
@@ -745,21 +859,23 @@ defmodule ClawCode.CLITest do
     assert output =~ "Unknown options: --api-keyy"
   end
 
-  defp start_stub_server(responses) do
+  defp start_stub_server(responses, opts \\ []) do
     {:ok, listener} =
       :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true])
 
     {:ok, port} = :inet.port(listener)
+    request_caller = self()
+    capture_requests? = Keyword.get(opts, :capture_requests, false)
 
     server =
       spawn_link(fn ->
-        serve_responses(listener, responses)
+        serve_responses(listener, responses, request_caller, capture_requests?)
       end)
 
     {"http://127.0.0.1:#{port}/v1", listener, server}
   end
 
-  defp serve_responses(listener, responses) do
+  defp serve_responses(listener, responses, request_caller, capture_requests?) do
     Enum.each(responses, fn response ->
       {body, delay_ms} =
         case response do
@@ -768,7 +884,12 @@ defmodule ClawCode.CLITest do
         end
 
       {:ok, socket} = :gen_tcp.accept(listener)
-      {:ok, _request} = read_request(socket, "")
+      {:ok, request} = read_request(socket, "")
+
+      if capture_requests? do
+        send(request_caller, {:request, request})
+      end
+
       Process.sleep(delay_ms)
       :ok = :gen_tcp.send(socket, http_response(body))
       :gen_tcp.close(socket)

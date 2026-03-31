@@ -194,6 +194,127 @@ defmodule ClawCode.RuntimeTest do
     assert request =~ "\"tools\""
   end
 
+  test "chat can force tool specs for a simple prompt" do
+    responses = [
+      %{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => "forced tools reply"
+            }
+          }
+        ]
+      }
+    ]
+
+    {base_url, listener, server} =
+      start_stub_server(Enum.map(responses, &Jason.encode!/1), capture_requests: true)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    result =
+      Runtime.chat("hello from local inference",
+        provider: "generic",
+        base_url: base_url,
+        api_key: nil,
+        model: "local-model",
+        native: false,
+        tools: true
+      )
+
+    assert result.stop_reason == "completed"
+    assert_receive {:request, request}, 1_000
+    assert request =~ "\"tools\""
+  end
+
+  test "chat can suppress tool specs for a repo prompt" do
+    responses = [
+      %{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => "no tools reply"
+            }
+          }
+        ]
+      }
+    ]
+
+    {base_url, listener, server} =
+      start_stub_server(Enum.map(responses, &Jason.encode!/1), capture_requests: true)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    result =
+      Runtime.chat("inspect the repo and list relevant files",
+        provider: "generic",
+        base_url: base_url,
+        api_key: "test-key",
+        model: "test-model",
+        native: false,
+        tools: false
+      )
+
+    assert result.stop_reason == "completed"
+    assert_receive {:request, request}, 1_000
+    refute request =~ "\"tools\""
+  end
+
+  test "chat honors CLAW_TOOL_MODE when no explicit tools flag is set" do
+    previous = System.get_env("CLAW_TOOL_MODE")
+    System.put_env("CLAW_TOOL_MODE", "off")
+
+    on_exit(fn ->
+      if is_nil(previous) do
+        System.delete_env("CLAW_TOOL_MODE")
+      else
+        System.put_env("CLAW_TOOL_MODE", previous)
+      end
+    end)
+
+    responses = [
+      %{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => "env policy reply"
+            }
+          }
+        ]
+      }
+    ]
+
+    {base_url, listener, server} =
+      start_stub_server(Enum.map(responses, &Jason.encode!/1), capture_requests: true)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    result =
+      Runtime.chat("inspect the repo and list relevant files",
+        provider: "generic",
+        base_url: base_url,
+        api_key: "test-key",
+        model: "test-model",
+        native: false
+      )
+
+    assert result.stop_reason == "completed"
+    assert_receive {:request, request}, 1_000
+    refute request =~ "\"tools\""
+  end
+
   test "chat rejects a concurrent run on the same session id" do
     root = Path.join(System.tmp_dir!(), "claw-code-runtime-busy-test-#{SessionStore.new_id()}")
     File.rm_rf(root)

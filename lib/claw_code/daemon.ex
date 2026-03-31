@@ -14,6 +14,7 @@ defmodule ClawCode.Daemon do
     max_turns
     allow_shell
     allow_write
+    tools
     native
     session_root
   )

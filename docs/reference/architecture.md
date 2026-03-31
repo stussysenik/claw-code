@@ -107,6 +107,7 @@ The operator layer should stay explicit:
 - `chat` vs `chat --daemon`
 - `cancel-session` vs `cancel-session --daemon`
 - `--session-root` and `--daemon-root` for isolated roots
+- `--tools` and `--no-tools` for explicit tool-calling control
 - Ralph loops for validation instead of ad hoc shell rituals
 
 If the operator surface becomes implicit, the repo will become harder to reason about and harder to teach from.
@@ -118,4 +119,5 @@ The next extensions should still follow the same boundary:
 - richer daemon replay and inspection semantics in Elixir
 - stale-daemon recovery coverage in Elixir
 - provider hardening in the OpenAI-compatible boundary
+- a TUI client on top of the local Elixir control plane
 - only narrow, measurable acceleration work at the Zig edge

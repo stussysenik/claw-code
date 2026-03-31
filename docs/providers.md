@@ -14,6 +14,7 @@
 - Local runtime commands also autoload `.env.local` and `.env` when present.
 - Do not rely on committed secret files.
 - `claw_code` only needs one OpenAI-compatible contract: base URL, API key, and model.
+- Tool exposure defaults to `auto`: repo-oriented prompts expose tools, plain chat prompts do not. Use `--tools` to force tool specs on, `--no-tools` to force chat-only mode, or `CLAW_TOOL_MODE=auto|on|off` for env-driven defaults.
 - `./claw_code doctor` reports the active provider request URL, whether the provider is fully configured, and whether each field is coming from an env var, a default, or is still missing.
 - `./scripts/qa.sh provider` is env-driven; use direct `./claw_code doctor` or `./claw_code chat` commands when you want to pass explicit CLI flags.
 
@@ -40,6 +41,7 @@ Custom OpenAI-compatible endpoint:
   --base-url "https://example.com/v1" \
   --api-key "$CLAW_API_KEY" \
   --model "GLM-4.7" \
+  --no-tools \
   "say hello and report the configured provider"
 ```
 
