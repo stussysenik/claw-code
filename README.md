@@ -1,5 +1,8 @@
 # claw_code
 
+![Demo](demo.gif)
+
+
 `claw_code` is an Elixir-first coding runtime with explicit session state, replayable tool execution, isolated Zig helpers, and adapter-based provider/runtime integrations.
 
 ## Table of Contents
