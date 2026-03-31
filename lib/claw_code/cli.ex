@@ -89,7 +89,13 @@ defmodule ClawCode.CLI do
       ["sessions" | rest] ->
         with {:ok, opts, _args} <- parse_opts(rest) do
           limit = Keyword.get(opts, :limit, 20)
-          sessions = SessionStore.list(limit: limit, root: session_root_opt(opts))
+
+          sessions =
+            SessionStore.list(
+              limit: limit,
+              root: session_root_opt(opts),
+              query: opts[:query]
+            )
 
           emit_value(%{sessions: Enum.map(sessions, &session_summary/1)}, opts, fn ->
             render_sessions(sessions)
@@ -783,7 +789,7 @@ defmodule ClawCode.CLI do
       daemon start [--daemon-root PATH] [--session-root PATH] [--json]
       daemon status [--daemon-root PATH] [--json]
       daemon stop [--daemon-root PATH] [--json]
-      sessions [--limit N] [--session-root PATH] [--json]
+      sessions [--limit N] [--query TEXT] [--session-root PATH] [--json]
       commands [--limit N] [--query TEXT]
       tools [--limit N] [--query TEXT] [--deny-tool NAME] [--deny-prefix PREFIX]
       route <prompt> [--limit N] [--native|--no-native]

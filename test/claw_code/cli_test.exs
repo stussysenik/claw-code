@@ -317,6 +317,37 @@ defmodule ClawCode.CLITest do
     assert [%{"id" => "session-json"} | _rest] = payload["sessions"]
   end
 
+  test "sessions command can filter by query" do
+    root = Path.join(System.tmp_dir!(), "claw-code-cli-sessions-query-test")
+    previous_root = Application.get_env(:claw_code, :session_root)
+
+    on_exit(fn ->
+      if is_nil(previous_root) do
+        Application.delete_env(:claw_code, :session_root)
+      else
+        Application.put_env(:claw_code, :session_root, previous_root)
+      end
+    end)
+
+    Application.put_env(:claw_code, :session_root, root)
+
+    SessionStore.save(%{id: "session-alpha", prompt: "review alpha repo", messages: []},
+      root: root
+    )
+
+    SessionStore.save(%{id: "session-beta", prompt: "inspect beta service", messages: []},
+      root: root
+    )
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["sessions", "--limit", "5", "--query", "beta"]) == 0
+      end)
+
+    assert output =~ "session-beta"
+    refute output =~ "session-alpha"
+  end
+
   test "load-session can render messages and receipts" do
     root = Path.join(System.tmp_dir!(), "claw-code-cli-load-session-detail-test")
     previous_root = Application.get_env(:claw_code, :session_root)

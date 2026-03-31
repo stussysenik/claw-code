@@ -49,6 +49,7 @@ defmodule ClawCode.SessionStore do
   def list(opts \\ []) do
     root = Keyword.get(opts, :root, root_dir())
     limit = Keyword.get(opts, :limit, 20)
+    query = normalize_query(Keyword.get(opts, :query))
 
     root
     |> Path.join("*.json")
@@ -63,6 +64,7 @@ defmodule ClawCode.SessionStore do
       fn session -> {session["updated_at"] || session["saved_at"] || "", session["id"] || ""} end,
       :desc
     )
+    |> maybe_filter_query(query)
     |> Enum.take(limit)
   end
 
@@ -96,6 +98,42 @@ defmodule ClawCode.SessionStore do
 
   def root_dir do
     Application.get_env(:claw_code, :session_root, Path.expand(".claw/sessions", File.cwd!()))
+  end
+
+  defp maybe_filter_query(sessions, nil), do: sessions
+
+  defp maybe_filter_query(sessions, query) do
+    Enum.filter(sessions, &matches_query?(&1, query))
+  end
+
+  defp matches_query?(session, query) do
+    haystack =
+      [
+        session["id"],
+        session["prompt"],
+        session["output"],
+        session["stop_reason"],
+        get_in(session, ["provider", "provider"]),
+        Enum.map_join(session["messages"] || [], "\n", &message_text/1)
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join("\n")
+      |> String.downcase()
+
+    String.contains?(haystack, query)
+  end
+
+  defp message_text(%{"content" => content}) when is_binary(content), do: content
+  defp message_text(%{"role" => role}) when is_binary(role), do: role
+  defp message_text(_message), do: ""
+
+  defp normalize_query(nil), do: nil
+
+  defp normalize_query(query) when is_binary(query) do
+    case query |> String.trim() |> String.downcase() do
+      "" -> nil
+      normalized -> normalized
+    end
   end
 
   defp stringify_keys(map) do

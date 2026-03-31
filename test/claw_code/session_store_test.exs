@@ -58,4 +58,22 @@ defmodule ClawCode.SessionStoreTest do
 
     assert Enum.any?(sessions, &(&1["id"] == "session-1"))
   end
+
+  test "list can filter sessions by query text" do
+    root = Path.join(System.tmp_dir!(), "claw-code-session-store-query-test")
+
+    SessionStore.save(
+      %{id: "session-alpha", prompt: "review alpha repo", output: "done", messages: []},
+      root: root
+    )
+
+    SessionStore.save(
+      %{id: "session-beta", prompt: "inspect beta service", output: "done", messages: []},
+      root: root
+    )
+
+    sessions = SessionStore.list(root: root, limit: 10, query: "beta")
+
+    assert Enum.map(sessions, & &1["id"]) == ["session-beta"]
+  end
 end

@@ -47,7 +47,7 @@ defmodule ClawCode.TUITest do
     assert output =~ "# Claw Code TUI"
     assert output =~ "provider=generic"
     assert output =~ "selected=1/1"
-    assert output =~ "filter=all limit=8"
+    assert output =~ "filter=all limit=8 query=-"
     assert output =~ "session-a"
     assert output =~ "assistant: world"
   end
@@ -219,7 +219,7 @@ defmodule ClawCode.TUITest do
     assert prev_state.selected_session_id == "session-b"
   end
 
-  test "open aliases select latest running and failed sessions" do
+  test "open aliases select latest running completed and failed sessions" do
     all_sessions = [
       %{
         "id" => "session-latest",
@@ -260,6 +260,9 @@ defmodule ClawCode.TUITest do
 
     {:continue, running_state} = TUI.apply_command(state, "open running")
     assert running_state.selected_session_id == "session-running"
+
+    {:continue, completed_state} = TUI.apply_command(state, "open completed")
+    assert completed_state.selected_session_id == "session-latest"
 
     {:continue, failed_state} = TUI.apply_command(state, "open failed")
     assert failed_state.selected_session_id == "session-failed"
@@ -303,5 +306,36 @@ defmodule ClawCode.TUITest do
     {:continue, limited_state} = TUI.apply_command(filtered_state, "limit 2")
     assert limited_state.session_limit == 2
     assert length(limited_state.all_sessions) == 2
+  end
+
+  test "find and clear find rebuild the visible session list" do
+    root = Path.join(System.tmp_dir!(), "claw-code-tui-find-#{SessionStore.new_id()}")
+    File.rm_rf(root)
+
+    on_exit(fn -> File.rm_rf(root) end)
+
+    SessionStore.save(%{id: "session-alpha", prompt: "review alpha repo", messages: []},
+      root: root
+    )
+
+    SessionStore.save(%{id: "session-beta", prompt: "inspect beta service", messages: []},
+      root: root
+    )
+
+    state =
+      TUI.build_state(
+        [provider: "generic"],
+        %{"status" => "running", "session_root" => root},
+        nil
+      )
+
+    {:continue, found_state} = TUI.apply_command(state, "find beta")
+    assert found_state.session_query == "beta"
+    assert length(found_state.all_sessions) == 2
+    assert Enum.map(found_state.sessions, & &1["id"]) == ["session-beta"]
+
+    {:continue, cleared_state} = TUI.apply_command(found_state, "clear find")
+    assert cleared_state.session_query == nil
+    assert length(cleared_state.sessions) == 2
   end
 end
