@@ -14,7 +14,15 @@ defmodule ClawCode.NativeRanker do
   end
 
   def rank(prompt, entries) do
-    ensure_compiled!()
+    case safe_rank(prompt, entries) do
+      {:ok, ranked} -> ranked
+      {:error, reason} -> raise "native ranker failed: #{format_error(reason)}"
+    end
+  end
+
+  def safe_rank(prompt, entries, opts \\ []) do
+    ensure_compiled = Keyword.get(opts, :ensure_compiled, &ensure_compiled/0)
+    runner = Keyword.get(opts, :runner, &run_binary/1)
 
     input =
       [
@@ -38,9 +46,16 @@ defmodule ClawCode.NativeRanker do
     tmp_path = temp_input_path()
     File.write!(tmp_path, input)
 
-    case System.cmd(@binary_path, [tmp_path], stderr_to_stdout: true) do
-      {output, 0} -> parse_output(output)
-      {output, _status} -> raise "native ranker failed: #{String.trim(output)}"
+    with :ok <- ensure_compiled.(),
+         {output, 0} <- runner.(tmp_path),
+         {:ok, ranked} <- parse_output(output) do
+      {:ok, ranked}
+    else
+      {:error, _reason} = error ->
+        error
+
+      {output, status} ->
+        {:error, {:execution_failed, status, String.trim(output)}}
     end
   after
     if tmp_path = Process.get({__MODULE__, :tmp_path}) do
@@ -49,7 +64,7 @@ defmodule ClawCode.NativeRanker do
     end
   end
 
-  defp ensure_compiled! do
+  defp ensure_compiled do
     needs_compile? =
       not File.exists?(@binary_path) or
         File.stat!(@source_path).mtime > File.stat!(@binary_path).mtime
@@ -69,28 +84,47 @@ defmodule ClawCode.NativeRanker do
              stderr_to_stdout: true
            ) do
         {_output, 0} -> :ok
-        {output, _status} -> raise "failed to compile Zig ranker: #{String.trim(output)}"
+        {output, status} -> {:error, {:compile_failed, status, String.trim(output)}}
       end
+    else
+      :ok
     end
+  end
+
+  defp ensure_compiled! do
+    case ensure_compiled() do
+      :ok -> :ok
+      {:error, reason} -> raise "failed to compile Zig ranker: #{format_error(reason)}"
+    end
+  end
+
+  defp run_binary(tmp_path) do
+    System.cmd(@binary_path, [tmp_path], stderr_to_stdout: true)
   end
 
   defp parse_output(output) do
     output
     |> String.split("\n", trim: true)
-    |> Enum.map(fn line ->
+    |> Enum.reduce_while({:ok, []}, fn line, {:ok, rows} ->
       case String.split(line, "\t", parts: 4) do
         [kind, name, source_hint, score] ->
-          %{
+          row = %{
             kind: String.to_existing_atom(kind),
             name: name,
             source_hint: source_hint,
             score: String.to_integer(score)
           }
 
+          {:cont, {:ok, [row | rows]}}
+
         _ ->
-          raise "invalid native ranker output: #{inspect(line)}"
+          {:halt, {:error, {:invalid_output, line}}}
       end
     end)
+    |> case do
+      {:ok, rows} -> {:ok, Enum.reverse(rows)}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp sanitize(value) do
@@ -105,4 +139,15 @@ defmodule ClawCode.NativeRanker do
     Process.put({__MODULE__, :tmp_path}, path)
     path
   end
+
+  defp format_error({:compile_failed, status, message}),
+    do: "compile status #{status}: #{message}"
+
+  defp format_error({:execution_failed, status, message}),
+    do: "execution status #{status}: #{message}"
+
+  defp format_error({:invalid_output, line}),
+    do: "invalid output #{inspect(line)}"
+
+  defp format_error(other), do: inspect(other)
 end

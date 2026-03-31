@@ -10,26 +10,22 @@ defmodule ClawCode.Router do
     context = Keyword.get(opts, :permission_context, Permissions.new())
     limit = Keyword.get(opts, :limit, 5)
     use_native = Keyword.get(opts, :native, true)
+    native_ranker = Keyword.get(opts, :native_ranker, NativeRanker)
     entries = Registry.entries(:all, context)
 
-    try do
-      ranked =
-        if use_native and NativeRanker.available?() do
-          native_rank(prompt, entries)
-        else
-          pure_rank(prompt, entries)
+    ranked =
+      if use_native and native_ranker.available?() do
+        case native_ranker.safe_rank(prompt, entries) do
+          {:ok, rows} -> native_matches(rows, entries)
+          {:error, _reason} -> pure_rank(prompt, entries)
         end
+      else
+        pure_rank(prompt, entries)
+      end
 
-      ranked
-      |> Enum.filter(&(&1.score > 0))
-      |> select_balanced(limit)
-    rescue
-      _error ->
-        prompt
-        |> pure_rank(entries)
-        |> Enum.filter(&(&1.score > 0))
-        |> select_balanced(limit)
-    end
+    ranked
+    |> Enum.filter(&(&1.score > 0))
+    |> select_balanced(limit)
   end
 
   def pure_rank(prompt, entries) do
@@ -60,9 +56,9 @@ defmodule ClawCode.Router do
     |> Enum.sort_by(&{-&1.score, &1.kind, &1.name})
   end
 
-  defp native_rank(prompt, entries) do
+  defp native_matches(rows, entries) do
     scores =
-      NativeRanker.rank(prompt, entries)
+      rows
       |> Map.new(fn row -> {{row.kind, row.name, row.source_hint}, row.score} end)
 
     entries
