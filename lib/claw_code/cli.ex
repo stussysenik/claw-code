@@ -7,7 +7,8 @@ defmodule ClawCode.CLI do
     Router,
     Runtime,
     SessionStore,
-    Symphony
+    Symphony,
+    TUI
   }
 
   alias ClawCode.Providers.OpenAICompatible
@@ -172,6 +173,16 @@ defmodule ClawCode.CLI do
         result = Symphony.run(join_args(args), opts)
         IO.puts(Symphony.render(result))
         0
+
+      ["tui" | rest] ->
+        with {:ok, opts, _args} <- parse_opts(rest, validate_provider: true),
+             :ok <- normalize_tui_result(TUI.start(opts)) do
+          0
+        else
+          {:error, message} ->
+            IO.puts(message)
+            1
+        end
 
       ["turn-loop" | rest] ->
         run(["chat" | rest])
@@ -642,6 +653,9 @@ defmodule ClawCode.CLI do
   defp daemon_error_message(reason) when is_binary(reason), do: reason
   defp daemon_error_message(reason), do: inspect(reason)
 
+  defp normalize_tui_result(:ok), do: :ok
+  defp normalize_tui_result({:error, reason}), do: {:error, daemon_error_message(reason)}
+
   defp normalize_cancel({:ok, {_path, document}}), do: {:ok, document}
   defp normalize_cancel({:error, :not_running}), do: {:error, :not_running}
   defp normalize_cancel({:error, :not_found}), do: {:error, :not_found}
@@ -736,6 +750,7 @@ defmodule ClawCode.CLI do
       resume-session <session_id> <prompt> [--daemon] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--max-turns N] [--allow-shell] [--allow-write] [--tools|--no-tools] [--native|--no-native] [--session-root PATH] [--daemon-root PATH] [--json]
       cancel-session <session_id> [--daemon] [--session-root PATH] [--daemon-root PATH] [--json]
       symphony <prompt> [--limit N] [--native|--no-native]
+      tui [--limit N] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--tools|--no-tools] [--daemon-root PATH] [--session-root PATH]
       turn-loop <prompt> ...
       show-command <name>
       show-tool <name>

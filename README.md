@@ -118,7 +118,9 @@ Sessions live under `.claw/sessions/` and can be resumed by explicit id.
 
 The design goal is not a network service or a distributed node mesh. It is a boring, inspectable local coordinator that can survive a shell exit, keep session ownership stable, and become the foundation for future multi-client control without loosening the current KISS/DRY/SRP boundaries. Use `--session-root PATH` and `--daemon-root PATH` when you want isolated operator roots for testing or parallel work.
 
-The final UX can absolutely include a full terminal UI, but the correct layering stays engine first: the Elixir runtime and daemon remain the product core, and any future TUI is a client over that control plane instead of the architectural center.
+The final UX can absolutely include a full terminal UI, and the correct layering stays engine first: the Elixir runtime and daemon remain the product core, and the TUI is a client over that control plane instead of the architectural center.
+
+`./claw_code tui` is the first in-repo slice of that client. It is intentionally minimal: recent sessions, selected transcript, tool receipts, and a command loop for `chat`, `resume`, `open`, `cancel`, and `tools`.
 
 ## Provider Setup
 

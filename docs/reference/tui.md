@@ -10,7 +10,7 @@
 
 ## Goal
 
-Make the future terminal UI a thin client over the Elixir runtime and daemon, not a second runtime with duplicated state, provider logic, or tool execution.
+Make the terminal UI a thin client over the Elixir runtime and daemon, not a second runtime with duplicated state, provider logic, or tool execution.
 
 ## Correct Layering
 
@@ -18,9 +18,25 @@ Make the future terminal UI a thin client over the Elixir runtime and daemon, no
 - Zig stays a narrow optional optimization boundary.
 - The TUI reads and writes through stable operator commands first, then can speak the daemon protocol directly later if that earns its complexity.
 
+## Current Slice
+
+The repo now includes a first terminal client:
+
+```bash
+./claw_code tui
+```
+
+It stays intentionally small:
+
+- recent session list
+- selected transcript and receipts
+- daemon-backed `chat` and `resume`
+- explicit `tools auto|on|off`
+- `open`, `cancel`, `refresh`, `help`, and `quit`
+
 ## Minimal Client Contract
 
-The first stable contract for a terminal UI is JSON over the existing CLI:
+The stable contract under the TUI is still JSON over the existing CLI:
 
 - `./claw_code doctor --json`
 - `./claw_code daemon start --json`
@@ -40,7 +56,7 @@ This keeps the UI replaceable while the daemon/runtime semantics harden.
 - right drawer: receipts, run state, and provider details
 - footer: prompt composer plus provider/model badges
 
-The UI should initially poll or shell out instead of demanding streaming/event infrastructure on day one.
+The current in-repo TUI uses the same local control-plane boundaries and keeps the interaction model simple. Streaming and richer panes can come later.
 
 ## Non-Goals
 
