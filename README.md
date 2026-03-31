@@ -5,6 +5,7 @@
 ## Table of Contents
 
 - [What Lives Here](#what-lives-here)
+- [Architecture Reference](#architecture-reference)
 - [Canonical Operator Layer](#canonical-operator-layer)
 - [Working Commands](#working-commands)
 - [Session Resume](#session-resume)
@@ -22,6 +23,10 @@
 - GLM, Kimi, and NVIDIA NIM stay behind one OpenAI-compatible provider boundary.
 - OMX is the planning and execution layer, not the shipped runtime.
 
+## Architecture Reference
+
+The right way to think about this repo is: `claw_code` is Elixir-first with a small Zig fast path, not a mixed-language app without a center. The canonical reference for that boundary is [docs/reference/architecture.md](./docs/reference/architecture.md).
+
 ## Canonical Operator Layer
 
 - [AGENTS.md](./AGENTS.md)
@@ -29,6 +34,7 @@
 - [.omx/board.md](./.omx/board.md)
 - [.omx/team.md](./.omx/team.md)
 - [docs/backlog.md](./docs/backlog.md)
+- [docs/reference/architecture.md](./docs/reference/architecture.md)
 - [docs/execution-plan.md](./docs/execution-plan.md)
 - [docs/engineering-standards.md](./docs/engineering-standards.md)
 - [docs/providers.md](./docs/providers.md)

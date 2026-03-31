@@ -17,6 +17,7 @@ The repo should stay small, teachable, and evidence-driven. OMX belongs in the o
 See also:
 
 - `AGENTS.md` for engineering standards
+- `docs/reference/architecture.md` for the canonical Elixir/Zig boundary
 - `.omx/board.md` for execution tracking
 - `docs/execution-plan.md` for phase sequencing
 - `progress.md` for the UTC workflow ledger

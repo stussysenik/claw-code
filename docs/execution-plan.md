@@ -6,6 +6,7 @@
 - [Team Topology](#team-topology)
 - [Phase Plan](#phase-plan)
 - [Daemon Proposal](#daemon-proposal)
+- [Architecture Reference](#architecture-reference)
 - [Git And Release Discipline](#git-and-release-discipline)
 - [Evidence Required Per Slice](#evidence-required-per-slice)
 
@@ -91,6 +92,10 @@ Turn `claw_code` into a learning repo and a durable coding runtime: small codeba
 ## Daemon Proposal
 
 The working proposal is documented in [docs/proposals/persistent-control-plane.md](./proposals/persistent-control-plane.md). It should be treated as the canonical design note for the daemon slice, while this file keeps the repo-level phase ordering.
+
+## Architecture Reference
+
+The canonical repository shape is documented in [docs/reference/architecture.md](./reference/architecture.md). Use that document when deciding whether a new change belongs in Elixir, Zig, provider adapters, or the daemon control plane.
 
 ## Git And Release Discipline
 
