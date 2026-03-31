@@ -159,8 +159,11 @@ defmodule ClawCode.TUI do
       "",
       "daemon=#{state.daemon_status["status"] || "unknown"} provider=#{state.doctor[:provider] || "unknown"} model=#{nested_value(state.doctor, [:model, :value]) || "missing"} tools=#{state.doctor[:tool_policy] || :auto}",
       "base_url=#{nested_value(state.doctor, [:base_url, :value]) || "missing"} selected=#{selected_session_position(state)}",
+      "runs=running:#{count_sessions(state.all_sessions, &session_running?/1)} completed:#{count_sessions(state.all_sessions, &session_completed?/1)} failed:#{count_sessions(state.all_sessions, &session_failed?/1)}",
       "sessions=#{length(state.sessions)}/#{length(state.all_sessions)} filter=#{state.session_filter} limit=#{state.session_limit} query=#{state.session_query || "-"}",
       "transcript_query=#{state.transcript_query || "-"} hit=#{selected_transcript_hit_position(state)}",
+      "selected_run=#{selected_run_summary(state.selected_session)}",
+      "selected_receipt=#{selected_receipt_summary(state.selected_session)}",
       "session_root=#{state.session_root}",
       if(state.notice, do: "notice=#{state.notice}"),
       "",
@@ -700,6 +703,8 @@ defmodule ClawCode.TUI do
     [
       "id=#{session["id"]}",
       "stop=#{session["stop_reason"] || "unknown"} run=#{get_in(session, ["run_state", "status"]) || "unknown"} turns=#{session["turns"] || 0}",
+      render_run_metadata(session),
+      render_last_receipt_summary(session),
       "messages:",
       render_messages(
         session["messages"] || [],
@@ -764,8 +769,35 @@ defmodule ClawCode.TUI do
     |> Enum.map_join("\n", fn {receipt, index} ->
       tool = receipt["tool_name"] || receipt[:tool_name] || receipt["tool"] || "unknown"
       status = receipt["status"] || receipt[:status] || "unknown"
-      "  #{index}. #{tool} #{status}"
+      duration_ms = receipt["duration_ms"] || receipt[:duration_ms] || "-"
+      started_at = receipt["started_at"] || receipt[:started_at] || "-"
+      "  #{index}. #{tool} #{status} #{duration_ms}ms #{started_at}"
     end)
+  end
+
+  defp render_run_metadata(session) do
+    run_state = session["run_state"] || %{}
+    started_at = run_state["started_at"] || "-"
+    finished_at = run_state["finished_at"] || "-"
+    last_stop_reason = run_state["last_stop_reason"] || session["stop_reason"] || "-"
+    "started=#{started_at} finished=#{finished_at} last_stop=#{last_stop_reason}"
+  end
+
+  defp render_last_receipt_summary(session) do
+    case last_receipt(session) do
+      nil ->
+        "last_receipt=none"
+
+      receipt ->
+        tool =
+          receipt["tool_name"] || receipt[:tool_name] || receipt["tool"] || receipt[:tool] ||
+            receipt["command"] || receipt[:command] || "unknown"
+
+        status = receipt["status"] || receipt[:status] || "unknown"
+        duration_ms = receipt["duration_ms"] || receipt[:duration_ms] || "-"
+        started_at = receipt["started_at"] || receipt[:started_at] || "-"
+        "last_receipt=#{tool} #{status} #{duration_ms}ms #{started_at}"
+    end
   end
 
   defp help_text do
@@ -803,6 +835,40 @@ defmodule ClawCode.TUI do
     case Enum.find_index(state.sessions, &(&1["id"] == state.selected_session_id)) do
       nil -> "none"
       index -> "#{index + 1}/#{length(state.sessions)}"
+    end
+  end
+
+  defp count_sessions(sessions, predicate) do
+    Enum.count(sessions, predicate)
+  end
+
+  defp selected_run_summary(nil), do: "none"
+
+  defp selected_run_summary(session) do
+    run_state = session["run_state"] || %{}
+    status = run_state["status"] || "unknown"
+
+    case status do
+      "running" -> "running since=#{run_state["started_at"] || "-"}"
+      _other -> "idle last_stop=#{run_state["last_stop_reason"] || session["stop_reason"] || "-"}"
+    end
+  end
+
+  defp selected_receipt_summary(nil), do: "none"
+
+  defp selected_receipt_summary(session) do
+    case last_receipt(session) do
+      nil ->
+        "none"
+
+      receipt ->
+        tool =
+          receipt["tool_name"] || receipt[:tool_name] || receipt["tool"] || receipt[:tool] ||
+            receipt["command"] || receipt[:command] || "unknown"
+
+        status = receipt["status"] || receipt[:status] || "unknown"
+        duration_ms = receipt["duration_ms"] || receipt[:duration_ms] || "-"
+        "#{tool}:#{status}:#{duration_ms}ms"
     end
   end
 
@@ -936,6 +1002,14 @@ defmodule ClawCode.TUI do
     else
       "Transcript find set to #{query}. Hit 1/#{match_count}."
     end
+  end
+
+  defp last_receipt(nil), do: nil
+
+  defp last_receipt(session) do
+    session
+    |> Map.get("tool_receipts", [])
+    |> List.last()
   end
 
   defp summarize(nil), do: ""

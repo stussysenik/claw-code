@@ -11,6 +11,11 @@ defmodule ClawCode.TUITest do
         "id" => "session-a",
         "updated_at" => "2026-03-31T19:00:00Z",
         "stop_reason" => "completed",
+        "run_state" => %{
+          "status" => "idle",
+          "finished_at" => "2026-03-31T19:01:00Z",
+          "last_stop_reason" => "completed"
+        },
         "messages" => [%{"role" => "user", "content" => "hello"}],
         "tool_receipts" => []
       }
@@ -33,6 +38,11 @@ defmodule ClawCode.TUITest do
       selected_session: %{
         "id" => "session-a",
         "stop_reason" => "completed",
+        "run_state" => %{
+          "status" => "idle",
+          "finished_at" => "2026-03-31T19:01:00Z",
+          "last_stop_reason" => "completed"
+        },
         "messages" => [
           %{"role" => "user", "content" => "hello"},
           %{"role" => "assistant", "content" => "world"}
@@ -47,10 +57,70 @@ defmodule ClawCode.TUITest do
     assert output =~ "# Claw Code TUI"
     assert output =~ "provider=generic"
     assert output =~ "selected=1/1"
+    assert output =~ "runs=running:0 completed:1 failed:0"
     assert output =~ "filter=all limit=8 query=-"
     assert output =~ "transcript_query=- hit=-"
+    assert output =~ "selected_run=idle last_stop=completed"
+    assert output =~ "selected_receipt=none"
+    assert output =~ "started=- finished=2026-03-31T19:01:00Z last_stop=completed"
+    assert output =~ "last_receipt=none"
     assert output =~ "session-a"
     assert output =~ "assistant: world"
+  end
+
+  test "render surfaces running counts and last receipt summary" do
+    running_session = %{
+      "id" => "session-running",
+      "stop_reason" => "running",
+      "run_state" => %{
+        "status" => "running",
+        "started_at" => "2026-03-31T20:00:00Z"
+      },
+      "messages" => [%{"role" => "assistant", "content" => "working"}],
+      "tool_receipts" => [
+        %{
+          "tool_name" => "shell",
+          "status" => "ok",
+          "duration_ms" => 42,
+          "started_at" => "2026-03-31T20:00:02Z"
+        }
+      ]
+    }
+
+    state = %State{
+      opts: [provider: "generic"],
+      daemon_status: %{"status" => "running"},
+      doctor: %{provider: "generic", model: %{value: "test-model"}, tool_policy: :auto},
+      all_sessions: [
+        running_session,
+        %{
+          "id" => "session-completed",
+          "stop_reason" => "completed",
+          "messages" => [],
+          "tool_receipts" => []
+        },
+        %{
+          "id" => "session-failed",
+          "stop_reason" => "provider_error",
+          "messages" => [],
+          "tool_receipts" => []
+        }
+      ],
+      sessions: [running_session],
+      session_filter: :running,
+      session_limit: 8,
+      session_root: System.tmp_dir!(),
+      selected_session_id: "session-running",
+      selected_session: running_session
+    }
+
+    output = TUI.render(state)
+
+    assert output =~ "runs=running:1 completed:1 failed:1"
+    assert output =~ "selected_run=running since=2026-03-31T20:00:00Z"
+    assert output =~ "selected_receipt=shell:ok:42ms"
+    assert output =~ "last_receipt=shell ok 42ms 2026-03-31T20:00:02Z"
+    assert output =~ "1. shell ok 42ms 2026-03-31T20:00:02Z"
   end
 
   test "open command selects a session by index" do
