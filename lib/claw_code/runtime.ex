@@ -169,58 +169,66 @@ defmodule ClawCode.Runtime do
 
   defp loop(session_pid, context, messages, config, tools, opts, turn, max_turns, receipts) do
     case OpenAICompatible.chat(config, messages, tools: tools) do
-      {:ok, %{"choices" => [%{"message" => message} | _]}} ->
-        assistant_message = normalize_assistant_message(message)
-        assistant_messages = messages ++ [assistant_message]
-
-        checkpoint_result(
-          session_pid,
-          context,
-          assistant_messages,
-          receipts,
-          context.existing_turns + turn
-        )
-
-        case tool_calls_from(message) do
-          [] ->
-            {:ok, assistant_messages, content_from(message), "completed", turn, receipts}
-
-          tool_calls ->
-            {tool_messages, new_receipts} =
-              Enum.map(tool_calls, fn tool_call ->
-                execute_tool_call(tool_call, opts, turn)
-              end)
-              |> Enum.unzip()
-
-            next_messages = assistant_messages ++ tool_messages
-            next_receipts = receipts ++ new_receipts
+      {:ok, response} ->
+        case OpenAICompatible.assistant_message(response) do
+          {:ok, message} ->
+            assistant_message = normalize_assistant_message(message)
+            assistant_messages = messages ++ [assistant_message]
 
             checkpoint_result(
               session_pid,
               context,
-              next_messages,
-              next_receipts,
+              assistant_messages,
+              receipts,
               context.existing_turns + turn
             )
 
-            loop(
-              session_pid,
-              context,
-              next_messages,
-              config,
-              tools,
-              opts,
-              turn + 1,
-              max_turns,
-              next_receipts
-            )
+            case tool_calls_from(message) do
+              [] ->
+                {:ok, assistant_messages, content_from(message), "completed", turn, receipts}
+
+              tool_calls ->
+                {tool_messages, new_receipts} =
+                  Enum.map(tool_calls, fn tool_call ->
+                    execute_tool_call(tool_call, opts, turn)
+                  end)
+                  |> Enum.unzip()
+
+                next_messages = assistant_messages ++ tool_messages
+                next_receipts = receipts ++ new_receipts
+
+                checkpoint_result(
+                  session_pid,
+                  context,
+                  next_messages,
+                  next_receipts,
+                  context.existing_turns + turn
+                )
+
+                loop(
+                  session_pid,
+                  context,
+                  next_messages,
+                  config,
+                  tools,
+                  opts,
+                  turn + 1,
+                  max_turns,
+                  next_receipts
+                )
+            end
+
+          :error ->
+            {:error, "provider returned no choices", messages, receipts, max(turn - 1, 0)}
         end
 
-      {:ok, _unexpected} ->
-        {:error, "provider returned no choices", messages, receipts, max(turn - 1, 0)}
-
       {:error, reason} ->
-        {:error, reason, messages, receipts, max(turn - 1, 0)}
+        if tools != [] and tool_policy(opts) == :auto and
+             OpenAICompatible.tooling_unsupported?(reason) do
+          loop(session_pid, context, messages, config, [], opts, turn, max_turns, receipts)
+        else
+          {:error, reason, messages, receipts, max(turn - 1, 0)}
+        end
     end
   end
 
@@ -229,11 +237,7 @@ defmodule ClawCode.Runtime do
          opts,
          turn
        ) do
-    parsed_arguments =
-      case Jason.decode(arguments) do
-        {:ok, decoded} -> decoded
-        {:error, _reason} -> %{"raw" => arguments}
-      end
+    parsed_arguments = parse_tool_arguments(arguments)
 
     {content, receipt} =
       case Builtin.execute_with_receipt(name, parsed_arguments, opts) do
@@ -254,6 +258,39 @@ defmodule ClawCode.Runtime do
       receipt
     }
   end
+
+  defp execute_tool_call(_tool_call, _opts, turn) do
+    receipt =
+      normalize_tool_receipt(
+        %{status: "error", output: "invalid tool call", exit_status: "error", cwd: File.cwd!()},
+        "invalid-tool-call-#{turn}",
+        "invalid_tool_call",
+        %{},
+        turn
+      )
+
+    {
+      %{
+        "role" => "tool",
+        "tool_call_id" => receipt.tool_call_id,
+        "name" => receipt.tool_name,
+        "content" => "error: invalid tool call"
+      },
+      receipt
+    }
+  end
+
+  defp parse_tool_arguments(arguments) when is_map(arguments), do: arguments
+
+  defp parse_tool_arguments(arguments) when is_binary(arguments) do
+    case Jason.decode(arguments) do
+      {:ok, decoded} -> decoded
+      {:error, _reason} -> %{"raw" => arguments}
+    end
+  end
+
+  defp parse_tool_arguments(nil), do: %{}
+  defp parse_tool_arguments(arguments), do: %{"raw" => inspect(arguments)}
 
   defp finalize_result(
          session_pid,
@@ -481,7 +518,25 @@ defmodule ClawCode.Runtime do
     end)
   end
 
-  defp tool_calls_from(%{"tool_calls" => tool_calls}) when is_list(tool_calls), do: tool_calls
+  defp tool_calls_from(%{"tool_calls" => tool_calls}) when is_list(tool_calls) do
+    tool_calls
+    |> Enum.map(&normalize_tool_call/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp tool_calls_from(%{"function_call" => %{"name" => name} = function_call})
+       when is_binary(name) do
+    [
+      %{
+        "id" => function_call["id"] || "function-call-#{name}",
+        "function" => %{
+          "name" => name,
+          "arguments" => normalize_tool_arguments(function_call["arguments"])
+        }
+      }
+    ]
+  end
+
   defp tool_calls_from(_message), do: []
 
   defp normalize_assistant_message(message) do
@@ -492,18 +547,25 @@ defmodule ClawCode.Runtime do
     |> maybe_put("tool_calls", message["tool_calls"], is_list(message["tool_calls"]))
   end
 
-  defp content_from(%{"content" => nil}), do: ""
-  defp content_from(%{"content" => content}) when is_binary(content), do: content
+  defp content_from(message), do: OpenAICompatible.message_content(message)
 
-  defp content_from(%{"content" => content}) when is_list(content) do
-    Enum.map_join(content, "\n", fn
-      %{"type" => "text", "text" => text} -> text
-      %{"text" => text} -> text
-      other -> Jason.encode!(other)
-    end)
+  defp normalize_tool_call(%{"function" => %{"name" => name} = function} = tool_call)
+       when is_binary(name) do
+    %{
+      "id" => tool_call["id"] || "tool-call-#{name}",
+      "function" => %{
+        "name" => name,
+        "arguments" => normalize_tool_arguments(function["arguments"])
+      }
+    }
   end
 
-  defp content_from(_message), do: ""
+  defp normalize_tool_call(_tool_call), do: nil
+
+  defp normalize_tool_arguments(arguments) when is_binary(arguments), do: arguments
+  defp normalize_tool_arguments(arguments) when is_map(arguments), do: Jason.encode!(arguments)
+  defp normalize_tool_arguments(nil), do: "{}"
+  defp normalize_tool_arguments(arguments), do: Jason.encode!(%{"raw" => inspect(arguments)})
 
   defp missing_provider_message(config) do
     envs = OpenAICompatible.required_env_vars(config.provider)
@@ -534,6 +596,7 @@ defmodule ClawCode.Runtime do
     %{
       provider: config.provider,
       base_url: config.base_url,
+      api_key_header: config.api_key_header,
       model: config.model,
       api_key_present: is_binary(config.api_key) and config.api_key != ""
     }

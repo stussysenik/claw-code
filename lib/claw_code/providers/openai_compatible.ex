@@ -10,7 +10,7 @@ defmodule ClawCode.Providers.OpenAICompatible do
     "local" => "generic"
   }
 
-  defstruct [:provider, :base_url, :api_key, :model]
+  defstruct [:provider, :base_url, :api_key, :api_key_header, :model]
 
   def providers, do: @providers
 
@@ -30,6 +30,7 @@ defmodule ClawCode.Providers.OpenAICompatible do
       provider: provider,
       base_url: opts[:base_url] || provider_base_url(provider),
       api_key: opts[:api_key] || provider_api_key(provider),
+      api_key_header: opts[:api_key_header] || provider_api_key_header(provider),
       model: opts[:model] || provider_model(provider)
     }
   end
@@ -56,6 +57,12 @@ defmodule ClawCode.Providers.OpenAICompatible do
       base_url:
         field_diagnostic(config.base_url, required.base_url, default_base_url(config.provider)),
       api_key: field_diagnostic(config.api_key, required.api_key, nil),
+      api_key_header:
+        field_diagnostic(
+          config.api_key_header,
+          ["CLAW_API_KEY_HEADER"],
+          default_api_key_header(config.provider)
+        ),
       model: field_diagnostic(config.model, required.model, default_model(config.provider))
     }
 
@@ -87,13 +94,75 @@ defmodule ClawCode.Providers.OpenAICompatible do
     request(config, payload)
   end
 
+  def probe(opts \\ []) do
+    config = resolve_config(opts)
+
+    prompt =
+      case Keyword.get(opts, :probe_prompt) || Keyword.get(opts, :prompt) do
+        nil -> "Reply with OK."
+        "" -> "Reply with OK."
+        value -> value
+      end
+
+    diagnostics = diagnostics(opts)
+
+    payload = %{
+      provider: config.provider,
+      configured: diagnostics.configured,
+      request_url: diagnostics.request_url,
+      api_key_header: config.api_key_header,
+      model: config.model,
+      missing: diagnostics.missing_fields
+    }
+
+    if configured?(config) do
+      started_at = System.monotonic_time(:millisecond)
+
+      case chat(config, [%{"role" => "user", "content" => prompt}], tools: []) do
+        {:ok, response} ->
+          latency_ms = System.monotonic_time(:millisecond) - started_at
+
+          case assistant_message(response) do
+            {:ok, message} ->
+              {:ok,
+               Map.merge(payload, %{
+                 status: "ok",
+                 latency_ms: latency_ms,
+                 response_preview: message_content(message)
+               })}
+
+            :error ->
+              {:error,
+               Map.merge(payload, %{
+                 status: "error",
+                 latency_ms: latency_ms,
+                 error: "provider returned no assistant message"
+               })}
+          end
+
+        {:error, reason} ->
+          {:error,
+           Map.merge(payload, %{
+             status: "error",
+             error: reason
+           })}
+      end
+    else
+      {:error,
+       Map.merge(payload, %{
+         status: "missing_config",
+         error: "missing provider configuration"
+       })}
+    end
+  end
+
   def request(%__MODULE__{} = config, payload) do
     url = request_url(config.base_url)
     body = Jason.encode!(payload)
 
     headers =
       [{~c"content-type", ~c"application/json"}]
-      |> maybe_put_bearer_header(config.api_key)
+      |> maybe_put_api_key_header(config.api_key, config.api_key_header)
 
     case :httpc.request(
            :post,
@@ -163,6 +232,8 @@ defmodule ClawCode.Providers.OpenAICompatible do
   def default_base_url("kimi"), do: "https://api.moonshot.ai/v1"
   def default_base_url(_provider), do: nil
 
+  def default_api_key_header(_provider), do: "authorization"
+
   def default_model("glm"), do: "GLM-4.7"
   def default_model("nim"), do: "meta/llama-3.1-8b-instruct"
   def default_model("kimi"), do: "kimi-k2.5"
@@ -220,19 +291,73 @@ defmodule ClawCode.Providers.OpenAICompatible do
     env("CLAW_MODEL")
   end
 
+  defp provider_api_key_header(_provider) do
+    env("CLAW_API_KEY_HEADER") || default_api_key_header("generic")
+  end
+
   defp env(name) do
     System.get_env(name)
   end
 
   def request_url(base_url) do
-    base_url = String.trim_trailing(base_url, "/")
+    uri = URI.parse(base_url)
+    path = uri.path || ""
 
-    if String.ends_with?(base_url, "/chat/completions") do
-      base_url
-    else
-      base_url <> "/chat/completions"
-    end
+    normalized_path =
+      if String.ends_with?(path, "/chat/completions") do
+        path
+      else
+        String.trim_trailing(path, "/") <> "/chat/completions"
+      end
+
+    uri
+    |> Map.put(:path, normalized_path)
+    |> URI.to_string()
   end
+
+  def tooling_unsupported?(reason) when is_binary(reason) do
+    normalized = String.downcase(reason)
+
+    String.contains?(normalized, "tool_choice") or
+      (String.contains?(normalized, "tools") and String.contains?(normalized, "unsupported")) or
+      (String.contains?(normalized, "function") and String.contains?(normalized, "unsupported"))
+  end
+
+  def tooling_unsupported?(_reason), do: false
+
+  def assistant_message(%{"choices" => [%{"message" => message} | _rest]}) when is_map(message),
+    do: {:ok, message}
+
+  def assistant_message(%{"choices" => [%{"delta" => delta} | _rest]}) when is_map(delta),
+    do: {:ok, delta}
+
+  def assistant_message(%{"choices" => [%{"text" => text} | _rest]}) when is_binary(text),
+    do: {:ok, %{"role" => "assistant", "content" => text}}
+
+  def assistant_message(%{"message" => message}) when is_map(message), do: {:ok, message}
+
+  def assistant_message(%{"output_text" => text}) when is_binary(text),
+    do: {:ok, %{"content" => text}}
+
+  def assistant_message(%{"content" => text}) when is_binary(text),
+    do: {:ok, %{"content" => text}}
+
+  def assistant_message(_response), do: :error
+
+  def message_content(%{"content" => nil}), do: ""
+  def message_content(%{"content" => content}) when is_binary(content), do: content
+  def message_content(%{"content" => %{"text" => text}}) when is_binary(text), do: text
+
+  def message_content(%{"content" => content}) when is_list(content) do
+    Enum.map_join(content, "\n", fn
+      %{"type" => "text", "text" => text} -> text
+      %{"text" => text} -> text
+      other -> Jason.encode!(other)
+    end)
+  end
+
+  def message_content(%{"text" => text}) when is_binary(text), do: text
+  def message_content(_message), do: ""
 
   defp normalize_provider(provider) when is_binary(provider) do
     provider
@@ -275,11 +400,21 @@ defmodule ClawCode.Providers.OpenAICompatible do
     end
   end
 
-  defp maybe_put_bearer_header(headers, api_key) when is_binary(api_key) and api_key != "" do
-    headers ++ [{~c"authorization", String.to_charlist("Bearer " <> api_key)}]
+  defp maybe_put_api_key_header(headers, api_key, header_name)
+       when is_binary(api_key) and api_key != "" and is_binary(header_name) and header_name != "" do
+    normalized_header = String.downcase(header_name)
+
+    value =
+      if normalized_header == "authorization" do
+        "Bearer " <> api_key
+      else
+        api_key
+      end
+
+    headers ++ [{String.to_charlist(normalized_header), String.to_charlist(value)}]
   end
 
-  defp maybe_put_bearer_header(headers, _api_key), do: headers
+  defp maybe_put_api_key_header(headers, _api_key, _header_name), do: headers
 
   defp maybe_put(map, _key, _value, false), do: map
   defp maybe_put(map, key, value, true), do: Map.put(map, key, value)

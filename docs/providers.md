@@ -23,6 +23,7 @@
 Kimi:
 
 ```bash
+./claw_code probe --provider kimi --api-key "$KIMI_API_KEY"
 ./claw_code doctor --provider kimi --api-key "$KIMI_API_KEY"
 ./claw_code chat --provider kimi --api-key "$KIMI_API_KEY" "say hello and report the configured provider"
 ```
@@ -30,6 +31,13 @@ Kimi:
 Custom OpenAI-compatible endpoint:
 
 ```bash
+./claw_code probe \
+  --provider generic \
+  --base-url "https://example.com/v1" \
+  --api-key "$CLAW_API_KEY" \
+  --api-key-header "authorization" \
+  --model "GLM-4.7"
+
 ./claw_code doctor \
   --provider generic \
   --base-url "https://example.com/v1" \
@@ -54,6 +62,9 @@ Custom OpenAI-compatible endpoint:
 - optional: `CLAW_API_KEY`
 - Use this for self-hosted or custom OpenAI-compatible inference endpoints, including your own GLM-serving stack.
 - If the endpoint does not require auth, omit `CLAW_API_KEY` entirely. `claw_code` will skip the `Authorization` header for `generic` when no API key is present.
+- If the endpoint expects a different auth header, pass `--api-key-header api-key` or export `CLAW_API_KEY_HEADER=api-key`.
+- `./claw_code probe` is the recommended first check before a longer session or TUI run.
+- When tool policy is still `auto`, `chat` will retry once without `tools` / `tool_choice` if a generic endpoint rejects those parameters as unsupported.
 - Smoke:
 
 ```bash

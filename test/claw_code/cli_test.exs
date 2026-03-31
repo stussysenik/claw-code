@@ -39,6 +39,23 @@ defmodule ClawCode.CLITest do
     assert output =~ "- api_key: tes**key"
   end
 
+  test "doctor accepts a custom api key header" do
+    output =
+      capture_io(fn ->
+        assert CLI.run([
+                 "doctor",
+                 "--provider",
+                 "generic",
+                 "--api-key",
+                 "test-key",
+                 "--api-key-header",
+                 "api-key"
+               ]) == 0
+      end)
+
+    assert output =~ "- api_key_header: api-key"
+  end
+
   test "doctor renders explicit tool policy" do
     output =
       capture_io(fn ->
@@ -46,6 +63,50 @@ defmodule ClawCode.CLITest do
       end)
 
     assert output =~ "- tool_policy: disabled"
+  end
+
+  test "probe renders provider connectivity" do
+    responses = [
+      Jason.encode!(%{
+        "choices" => [%{"message" => %{"role" => "assistant", "content" => "probe-ok"}}]
+      })
+    ]
+
+    {base_url, listener, server} = start_stub_server(responses)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    output =
+      capture_io(fn ->
+        assert CLI.run([
+                 "probe",
+                 "--provider",
+                 "generic",
+                 "--base-url",
+                 base_url,
+                 "--model",
+                 "local-model",
+                 "Reply with OK."
+               ]) == 0
+      end)
+
+    assert output =~ "# Probe"
+    assert output =~ "- status: ok"
+    assert output =~ "- response: probe-ok"
+  end
+
+  test "probe can render json failures for missing provider config" do
+    output =
+      capture_io(fn ->
+        assert CLI.run(["probe", "--provider", "generic", "--json"]) == 1
+      end)
+
+    payload = Jason.decode!(output)
+    assert payload["status"] == "missing_config"
+    assert payload["provider"] == "generic"
   end
 
   test "chat accepts explicit tool policy flags" do

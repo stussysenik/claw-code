@@ -158,6 +158,51 @@ defmodule ClawCode.RuntimeTest do
     refute Map.has_key?(session["provider"], "api_key")
   end
 
+  test "chat supports a custom api key header for generic endpoints" do
+    responses = [
+      %{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => "custom auth reply"
+            }
+          }
+        ]
+      }
+    ]
+
+    {base_url, listener, server} =
+      start_stub_server(Enum.map(responses, &Jason.encode!/1), capture_requests: true)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    result =
+      Runtime.chat("hello from custom auth",
+        provider: "generic",
+        base_url: base_url,
+        api_key: "header-test-key",
+        api_key_header: "api-key",
+        model: "local-model",
+        native: false
+      )
+
+    assert result.stop_reason == "completed"
+    assert_receive {:request, request}, 1_000
+    assert request =~ "api-key: header-test-key"
+    refute request =~ "Authorization:"
+
+    session =
+      result.session_path
+      |> Path.basename(".json")
+      |> then(&SessionStore.load(&1, root: Path.dirname(result.session_path)))
+
+    assert session["provider"]["api_key_header"] == "api-key"
+  end
+
   test "chat includes tool specs when the prompt implies repo work" do
     responses = [
       %{
@@ -557,6 +602,150 @@ defmodule ClawCode.RuntimeTest do
     assert result.stop_reason == "cancelled"
   end
 
+  test "chat accepts legacy function_call responses" do
+    responses = [
+      %{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => nil,
+              "function_call" => %{
+                "name" => "python_eval",
+                "arguments" => Jason.encode!(%{"code" => "print('legacy-ok')"})
+              }
+            }
+          }
+        ]
+      },
+      %{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => "legacy function completed"
+            }
+          }
+        ]
+      }
+    ]
+
+    {base_url, listener, server} = start_stub_server(Enum.map(responses, &Jason.encode!/1))
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    result =
+      Runtime.chat("run a python snippet",
+        provider: "generic",
+        base_url: base_url,
+        api_key: "test-key",
+        model: "test-model",
+        tools: true,
+        native: false
+      )
+
+    assert result.stop_reason == "completed"
+    assert result.output == "legacy function completed"
+    assert length(result.tool_receipts) == 1
+    assert hd(result.tool_receipts).tool_name == "python_eval"
+  end
+
+  test "chat accepts tool call arguments returned as an object" do
+    responses = [
+      %{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => nil,
+              "tool_calls" => [
+                %{
+                  "id" => "call_1",
+                  "type" => "function",
+                  "function" => %{
+                    "name" => "python_eval",
+                    "arguments" => %{"code" => "print('map-ok')"}
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      %{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => "map arguments completed"
+            }
+          }
+        ]
+      }
+    ]
+
+    {base_url, listener, server} = start_stub_server(Enum.map(responses, &Jason.encode!/1))
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    result =
+      Runtime.chat("run a python snippet",
+        provider: "generic",
+        base_url: base_url,
+        api_key: "test-key",
+        model: "test-model",
+        tools: true,
+        native: false
+      )
+
+    assert result.stop_reason == "completed"
+    assert result.output == "map arguments completed"
+    assert length(result.tool_receipts) == 1
+    assert hd(result.tool_receipts).tool_name == "python_eval"
+  end
+
+  test "chat retries without tools when an auto-tool provider rejects tool parameters" do
+    responses = [
+      {:raw, http_response(400, ~s({"error":{"message":"tools unsupported"}}))},
+      Jason.encode!(%{
+        "choices" => [%{"message" => %{"role" => "assistant", "content" => "plain fallback"}}]
+      })
+    ]
+
+    {base_url, listener, server} = start_stub_server(responses, capture_requests: true)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    result =
+      Runtime.chat("inspect the repo and list relevant files",
+        provider: "generic",
+        base_url: base_url,
+        api_key: nil,
+        model: "local-model",
+        native: false
+      )
+
+    assert result.stop_reason == "completed"
+    assert result.output == "plain fallback"
+
+    assert_receive {:request, first_request}, 1_000
+    assert first_request =~ "\"tools\""
+    assert first_request =~ "\"tool_choice\""
+
+    assert_receive {:request, second_request}, 1_000
+    refute second_request =~ "\"tools\""
+    refute second_request =~ "\"tool_choice\""
+  end
+
   defp start_stub_server(responses, opts \\ []) do
     {:ok, listener} =
       :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true])
@@ -575,10 +764,12 @@ defmodule ClawCode.RuntimeTest do
 
   defp serve_responses(listener, responses, request_caller, capture_requests?) do
     Enum.each(responses, fn response ->
-      {body, delay_ms} =
+      {body, delay_ms, raw_response?} =
         case response do
-          {body, delay_ms} -> {body, delay_ms}
-          body -> {body, 0}
+          {{:raw, body}, delay_ms} -> {body, delay_ms, true}
+          {:raw, body} -> {body, 0, true}
+          {body, delay_ms} -> {body, delay_ms, false}
+          body -> {body, 0, false}
         end
 
       {:ok, socket} = :gen_tcp.accept(listener)
@@ -589,7 +780,7 @@ defmodule ClawCode.RuntimeTest do
       end
 
       Process.sleep(delay_ms)
-      :ok = :gen_tcp.send(socket, http_response(body))
+      :ok = :gen_tcp.send(socket, if(raw_response?, do: body, else: http_response(body)))
       :gen_tcp.close(socket)
     end)
 
@@ -635,6 +826,26 @@ defmodule ClawCode.RuntimeTest do
   defp http_response(body) do
     [
       "HTTP/1.1 200 OK\r\n",
+      "content-type: application/json\r\n",
+      "content-length: #{byte_size(body)}\r\n",
+      "connection: close\r\n\r\n",
+      body
+    ]
+    |> IO.iodata_to_binary()
+  end
+
+  defp http_response(status, body) do
+    reason =
+      case status do
+        400 -> "Bad Request"
+        401 -> "Unauthorized"
+        404 -> "Not Found"
+        500 -> "Internal Server Error"
+        _other -> "OK"
+      end
+
+    [
+      "HTTP/1.1 #{status} #{reason}\r\n",
       "content-type: application/json\r\n",
       "content-length: #{byte_size(body)}\r\n",
       "connection: close\r\n\r\n",

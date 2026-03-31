@@ -164,6 +164,29 @@ defmodule ClawCode.TUITest do
     assert cleared_state.notice =~ "cleared"
   end
 
+  test "probe command reports missing provider configuration" do
+    state = %State{
+      opts: [provider: "generic"],
+      daemon_status: %{"status" => "unknown", "session_root" => System.tmp_dir!()},
+      doctor: %{
+        provider: "generic",
+        model: %{value: nil},
+        base_url: %{value: nil},
+        tool_policy: :auto
+      },
+      all_sessions: [],
+      sessions: [],
+      session_filter: :all,
+      session_limit: 8,
+      session_root: System.tmp_dir!(),
+      selected_session_id: nil,
+      selected_session: nil
+    }
+
+    {:continue, next_state} = TUI.apply_command(state, "probe")
+    assert next_state.notice =~ "Probe missing_config"
+  end
+
   test "next and prev commands move the selected session" do
     sessions = [
       %{"id" => "session-a", "messages" => [], "tool_receipts" => []},

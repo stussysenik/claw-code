@@ -60,6 +60,7 @@ defmodule ClawCode.Manifest do
       "- request_url: #{payload.request_url || "missing"}",
       "- base_url: #{payload.base_url.value || "missing"} (#{payload.base_url.source})",
       "- api_key: #{payload.api_key.masked} (#{payload.api_key.source})",
+      "- api_key_header: #{payload.api_key_header.value || "missing"} (#{payload.api_key_header.source})",
       "- model: #{payload.model.value || "missing"} (#{payload.model.source})",
       "- missing: #{render_missing_fields(payload.missing)}"
     ]
@@ -91,6 +92,10 @@ defmodule ClawCode.Manifest do
       api_key: %{
         masked: mask(config.api_key),
         source: diagnostics.fields.api_key.source
+      },
+      api_key_header: %{
+        value: config.api_key_header,
+        source: diagnostics.fields.api_key_header.source
       },
       model: %{
         value: config.model,

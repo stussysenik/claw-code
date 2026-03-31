@@ -32,6 +32,7 @@ It stays intentionally small:
 - selected transcript and receipts
 - daemon-backed `chat` and `resume`
 - in-client `provider`, `model`, and `base-url` switching, including reset-to-default
+- in-client `probe` for the active provider configuration
 - `next` and `prev` session navigation
 - session filtering and list limits inside the client
 - `open latest`, `open running`, and `open failed`
@@ -43,6 +44,7 @@ It stays intentionally small:
 The stable contract under the TUI is still JSON over the existing CLI:
 
 - `./claw_code doctor --json`
+- `./claw_code probe --json`
 - `./claw_code daemon start --json`
 - `./claw_code daemon status --json`
 - `./claw_code chat --daemon --json ...`

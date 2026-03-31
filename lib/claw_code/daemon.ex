@@ -10,6 +10,7 @@ defmodule ClawCode.Daemon do
     model
     base_url
     api_key
+    api_key_header
     session_id
     max_turns
     allow_shell

@@ -22,6 +22,7 @@ defmodule ClawCode.CLI do
     model: :string,
     base_url: :string,
     api_key: :string,
+    api_key_header: :string,
     session_id: :string,
     max_turns: :integer,
     allow_shell: :boolean,
@@ -59,6 +60,23 @@ defmodule ClawCode.CLI do
         with {:ok, opts, _args} <- parse_opts(rest, validate_provider: true) do
           emit_value(Manifest.doctor_payload(opts), opts, fn -> Manifest.render_doctor(opts) end)
           0
+        else
+          {:error, message} ->
+            emit_error(message, json_requested?(rest))
+            1
+        end
+
+      ["probe" | rest] ->
+        with {:ok, opts, args} <- parse_opts(rest, validate_provider: true) do
+          case OpenAICompatible.probe(Keyword.put(opts, :probe_prompt, join_args(args))) do
+            {:ok, payload} ->
+              emit_value(payload, opts, fn -> render_probe(payload) end)
+              0
+
+            {:error, payload} ->
+              emit_value(payload, opts, fn -> render_probe(payload) end)
+              1
+          end
         else
           {:error, message} ->
             emit_error(message, json_requested?(rest))
@@ -729,6 +747,29 @@ defmodule ClawCode.CLI do
   defp truncate(value, limit) when byte_size(value) <= limit, do: value
   defp truncate(value, limit), do: String.slice(value, 0, limit - 3) <> "..."
 
+  defp render_probe(payload) do
+    [
+      "# Probe",
+      "",
+      "- status: #{payload.status}",
+      "- provider: #{payload.provider}",
+      "- configured: #{payload.configured}",
+      "- request_url: #{payload.request_url || "missing"}",
+      "- model: #{payload.model || "missing"}",
+      if(payload[:latency_ms], do: "- latency_ms: #{payload.latency_ms}"),
+      if(payload[:response_preview],
+        do: "- response: #{summarize_text(payload.response_preview)}"
+      ),
+      if(payload[:error], do: "- error: #{payload.error}"),
+      "- missing: #{render_missing_fields(payload.missing || [])}"
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n")
+  end
+
+  defp render_missing_fields([]), do: "none"
+  defp render_missing_fields(fields), do: Enum.map_join(fields, ", ", &to_string/1)
+
   defp help do
     """
     claw_code <command>
@@ -736,7 +777,8 @@ defmodule ClawCode.CLI do
     Commands:
       summary
       manifest
-      doctor [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--tools|--no-tools] [--json]
+      doctor [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--api-key-header HEADER] [--tools|--no-tools] [--json]
+      probe [prompt] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--api-key-header HEADER] [--json]
       daemon serve [--daemon-root PATH] [--session-root PATH]
       daemon start [--daemon-root PATH] [--session-root PATH] [--json]
       daemon status [--daemon-root PATH] [--json]
@@ -746,11 +788,11 @@ defmodule ClawCode.CLI do
       tools [--limit N] [--query TEXT] [--deny-tool NAME] [--deny-prefix PREFIX]
       route <prompt> [--limit N] [--native|--no-native]
       bootstrap <prompt> [--limit N] [--native|--no-native]
-      chat <prompt> [--daemon] [--session-id ID] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--max-turns N] [--allow-shell] [--allow-write] [--tools|--no-tools] [--native|--no-native] [--session-root PATH] [--daemon-root PATH] [--json]
-      resume-session <session_id> <prompt> [--daemon] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--max-turns N] [--allow-shell] [--allow-write] [--tools|--no-tools] [--native|--no-native] [--session-root PATH] [--daemon-root PATH] [--json]
+      chat <prompt> [--daemon] [--session-id ID] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--api-key-header HEADER] [--max-turns N] [--allow-shell] [--allow-write] [--tools|--no-tools] [--native|--no-native] [--session-root PATH] [--daemon-root PATH] [--json]
+      resume-session <session_id> <prompt> [--daemon] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--api-key-header HEADER] [--max-turns N] [--allow-shell] [--allow-write] [--tools|--no-tools] [--native|--no-native] [--session-root PATH] [--daemon-root PATH] [--json]
       cancel-session <session_id> [--daemon] [--session-root PATH] [--daemon-root PATH] [--json]
       symphony <prompt> [--limit N] [--native|--no-native]
-      tui [--limit N] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--tools|--no-tools] [--daemon-root PATH] [--session-root PATH]
+      tui [--limit N] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--api-key-header HEADER] [--tools|--no-tools] [--daemon-root PATH] [--session-root PATH]
       turn-loop <prompt> ...
       show-command <name>
       show-tool <name>

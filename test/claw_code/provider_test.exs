@@ -98,6 +98,22 @@ defmodule ClawCode.ProviderTest do
     )
   end
 
+  test "generic config accepts a custom api key header" do
+    with_env(
+      %{
+        "CLAW_BASE_URL" => "http://127.0.0.1:4000/v1",
+        "CLAW_API_KEY" => "header-test-key",
+        "CLAW_API_KEY_HEADER" => "api-key",
+        "CLAW_MODEL" => "local-model"
+      },
+      fn ->
+        config = OpenAICompatible.resolve_config(provider: "generic")
+
+        assert config.api_key_header == "api-key"
+      end
+    )
+  end
+
   test "provider diagnostics show defaulted and missing fields without leaking keys" do
     with_env(
       %{
@@ -121,6 +137,30 @@ defmodule ClawCode.ProviderTest do
         assert diagnostics.fields.model.source == "default"
         assert diagnostics.fields.api_key.source == "missing"
         assert :api_key in diagnostics.missing_fields
+      end
+    )
+  end
+
+  test "request_url preserves an explicit chat completions endpoint with a query string" do
+    assert OpenAICompatible.request_url(
+             "https://example.com/openai/deployments/test/chat/completions?api-version=2024-10-21"
+           ) ==
+             "https://example.com/openai/deployments/test/chat/completions?api-version=2024-10-21"
+  end
+
+  test "probe returns a missing-config payload when the provider is not configured" do
+    with_env(
+      %{
+        "CLAW_BASE_URL" => nil,
+        "CLAW_MODEL" => nil,
+        "CLAW_API_KEY" => nil
+      },
+      fn ->
+        assert {:error, payload} = OpenAICompatible.probe(provider: "generic")
+        assert payload.status == "missing_config"
+        assert payload.provider == "generic"
+        assert :base_url in payload.missing
+        assert :model in payload.missing
       end
     )
   end

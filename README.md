@@ -83,6 +83,7 @@ mix test
 mix escript.build
 ./claw_code summary
 ./claw_code doctor
+./claw_code probe
 ./claw_code symphony --native "review MCP tool"
 ./claw_code chat --allow-shell --allow-write "inspect the repo and propose a minimal plan"
 ```
@@ -120,13 +121,15 @@ The design goal is not a network service or a distributed node mesh. It is a bor
 
 The final UX can absolutely include a full terminal UI, and the correct layering stays engine first: the Elixir runtime and daemon remain the product core, and the TUI is a client over that control plane instead of the architectural center.
 
-`./claw_code tui` is the first in-repo slice of that client. It is intentionally minimal: recent sessions, selected transcript, tool receipts, in-client provider/model/base-url switching with reset-to-default, session filtering and limits, and a command loop for `chat`, `resume`, `open`, `next`, `prev`, `cancel`, and `tools`.
+`./claw_code tui` is the first in-repo slice of that client. It is intentionally minimal: recent sessions, selected transcript, tool receipts, in-client provider/model/base-url switching with reset-to-default, session filtering and limits, provider `probe`, and a command loop for `chat`, `resume`, `open`, `next`, `prev`, `cancel`, and `tools`.
 
 ## Provider Setup
 
 Provider contracts are documented in [docs/providers.md](./docs/providers.md). `claw_code` accepts explicit CLI flags and also autoloads `.env.local` / `.env` at runtime for local development. Those files are git-ignored in this repo.
 
 `chat` and `resume-session` default to an `auto` tool policy: repo or tool-oriented prompts expose local tools, plain chat prompts do not. Use `--tools` to force tool specs on, `--no-tools` to force a chat-only request, or `CLAW_TOOL_MODE=auto|on|off` to set the default behavior across local and daemon-backed runs.
+
+`./claw_code probe` is the fastest way to validate a provider before a longer chat. It sends one small chat-completions request and reports the request URL, configuration state, latency, and a short response preview. When tool exposure is still in `auto`, `chat` now retries once without `tools` / `tool_choice` if a generic endpoint rejects those parameters. Generic endpoints can also override the auth header with `--api-key-header` or `CLAW_API_KEY_HEADER` when they expect something other than `Authorization: Bearer ...`.
 
 Core operator commands now also support `--json`, which is the intended first contract for a future terminal UI client. The boundary is documented in [docs/reference/tui.md](./docs/reference/tui.md).
 

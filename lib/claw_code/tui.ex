@@ -71,6 +71,9 @@ defmodule ClawCode.TUI do
       "r" ->
         refresh(state, "Refreshed.")
 
+      "probe" ->
+        probe_provider(state)
+
       "help" ->
         {:continue, %{state | notice: help_text()}}
 
@@ -135,7 +138,7 @@ defmodule ClawCode.TUI do
       render_selected_session(state.selected_session),
       "",
       "## Commands",
-      "chat <prompt> | resume <prompt> | open <n|id|latest|running|failed> | filter <all|running|completed|failed> | limit <n> | next | prev | cancel | provider <name|default> | model <name|default> | base-url <url> | clear base-url | tools auto|on|off | refresh | help | quit"
+      "chat <prompt> | resume <prompt> | open <n|id|latest|running|failed> | filter <all|running|completed|failed> | limit <n> | next | prev | cancel | provider <name|default> | model <name|default> | base-url <url> | clear base-url | tools auto|on|off | probe | refresh | help | quit"
     ]
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join("\n")
@@ -355,6 +358,19 @@ defmodule ClawCode.TUI do
     rebuild_with_opts(state, Keyword.delete(state.opts, :base_url), "Base URL cleared.")
   end
 
+  defp probe_provider(%State{} = state) do
+    notice =
+      case OpenAICompatible.probe(state.opts) do
+        {:ok, payload} ->
+          "Probe ok in #{payload.latency_ms}ms: #{summarize(payload.response_preview)}"
+
+        {:error, payload} ->
+          "Probe #{payload.status}: #{payload.error}"
+      end
+
+    rebuild_with_opts(state, state.opts, notice)
+  end
+
   defp set_session_filter(%State{} = state, value) do
     case normalize_session_filter(value) do
       nil ->
@@ -529,7 +545,7 @@ defmodule ClawCode.TUI do
   end
 
   defp help_text do
-    "Commands: chat <prompt>, resume <prompt>, open <n|id|latest|running|failed>, filter <all|running|completed|failed>, limit <n>, next, prev, cancel, provider <name|default>, model <name|default>, base-url <url>, clear base-url, tools auto|on|off, refresh, help, quit"
+    "Commands: chat <prompt>, resume <prompt>, open <n|id|latest|running|failed>, filter <all|running|completed|failed>, limit <n>, next, prev, cancel, provider <name|default>, model <name|default>, base-url <url>, clear base-url, tools auto|on|off, probe, refresh, help, quit"
   end
 
   defp step_session(%State{sessions: []} = state, _offset) do
