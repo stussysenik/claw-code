@@ -117,7 +117,7 @@ defmodule ClawCode.Runtime do
   end
 
   defp run_chat_session(context, messages, existing_receipts) do
-    tool_specs = Builtin.specs(context.opts)
+    tool_specs = tool_specs_for_prompt(context.prompt, context.matches, context.opts)
 
     case loop(
            context.session_pid,
@@ -401,6 +401,30 @@ defmodule ClawCode.Runtime do
       limit: Keyword.get(opts, :limit, 5),
       native: Keyword.get(opts, :native, true)
     ]
+  end
+
+  defp tool_specs_for_prompt(prompt, matches, opts) do
+    if expose_tools?(prompt, matches, opts) do
+      Builtin.specs(opts)
+    else
+      []
+    end
+  end
+
+  defp expose_tools?(prompt, _matches, opts) do
+    if Keyword.get(opts, :allow_shell, false) or Keyword.get(opts, :allow_write, false) do
+      true
+    else
+      prompt_text = String.downcase(prompt || "")
+
+      keyword_match? =
+        Regex.match?(
+          ~r/\b(repo|repository|project|file|files|path|read|inspect|review|search|list|command|tool|terminal|shell|write|edit|fix|refactor|test|build|compile|session)\b/,
+          prompt_text
+        )
+
+      keyword_match?
+    end
   end
 
   defp render_matches([]), do: "- none"

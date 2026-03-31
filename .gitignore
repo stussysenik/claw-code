@@ -3,6 +3,9 @@ archive/
 _build/
 deps/
 node_modules/
+.env
+.env.local
+.env.*.local
 .elixir_ls/
 .claw/
 .omx/logs/

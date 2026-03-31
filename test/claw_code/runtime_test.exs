@@ -146,6 +146,7 @@ defmodule ClawCode.RuntimeTest do
 
     assert_receive {:request, request}, 1_000
     refute request =~ "Authorization:"
+    refute request =~ "\"tools\""
 
     session =
       result.session_path
@@ -155,6 +156,42 @@ defmodule ClawCode.RuntimeTest do
     assert session["provider"]["provider"] == "generic"
     assert session["provider"]["api_key_present"] == false
     refute Map.has_key?(session["provider"], "api_key")
+  end
+
+  test "chat includes tool specs when the prompt implies repo work" do
+    responses = [
+      %{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => "repo reply"
+            }
+          }
+        ]
+      }
+    ]
+
+    {base_url, listener, server} =
+      start_stub_server(Enum.map(responses, &Jason.encode!/1), capture_requests: true)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    result =
+      Runtime.chat("inspect the repo and list relevant files",
+        provider: "generic",
+        base_url: base_url,
+        api_key: "test-key",
+        model: "test-model",
+        native: false
+      )
+
+    assert result.stop_reason == "completed"
+    assert_receive {:request, request}, 1_000
+    assert request =~ "\"tools\""
   end
 
   test "chat rejects a concurrent run on the same session id" do

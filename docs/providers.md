@@ -11,6 +11,7 @@
 ## Principles
 
 - Configure providers through environment variables or explicit CLI flags.
+- Local runtime commands also autoload `.env.local` and `.env` when present.
 - Do not rely on committed secret files.
 - `claw_code` only needs one OpenAI-compatible contract: base URL, API key, and model.
 - `./claw_code doctor` reports the active provider request URL, whether the provider is fully configured, and whether each field is coming from an env var, a default, or is still missing.

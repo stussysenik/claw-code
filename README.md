@@ -120,7 +120,7 @@ The design goal is not a network service or a distributed node mesh. It is a bor
 
 ## Provider Setup
 
-Provider contracts are documented in [docs/providers.md](./docs/providers.md). `claw_code` does not need to read secret files; pass provider credentials through environment variables or explicit CLI flags.
+Provider contracts are documented in [docs/providers.md](./docs/providers.md). `claw_code` accepts explicit CLI flags and also autoloads `.env.local` / `.env` at runtime for local development. Those files are git-ignored in this repo.
 
 `./claw_code doctor` now reports whether the active provider is fully configured, which request URL will be used, and whether each field came from an env var, a default, or is still missing.
 
