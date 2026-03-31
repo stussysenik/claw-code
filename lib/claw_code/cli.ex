@@ -178,18 +178,25 @@ defmodule ClawCode.CLI do
             1
         end
 
-      ["resume-session", session_id | rest] ->
+      ["resume-session", session_ref | rest] ->
         with {:ok, opts, args} <- parse_opts(rest, validate_provider: true) do
-          opts = Keyword.put(opts, :session_id, session_id)
-          run_chat(join_args(args), opts)
+          case expand_session_ref(session_ref, opts) do
+            {:ok, session_id} ->
+              opts = Keyword.put(opts, :session_id, session_id)
+              run_chat(join_args(args), opts)
+
+            {:error, :not_found} ->
+              emit_error("Session not found: #{session_ref}", json_requested?(rest))
+              1
+          end
         else
           {:error, message} ->
             emit_error(message, json_requested?(rest))
             1
         end
 
-      ["cancel-session", session_id | rest] ->
-        run_cancel(session_id, rest)
+      ["cancel-session", session_ref | rest] ->
+        run_cancel(session_ref, rest)
 
       ["symphony" | rest] ->
         {opts, args, _invalid} = OptionParser.parse(rest, strict: @switches)
@@ -267,14 +274,19 @@ defmodule ClawCode.CLI do
             0
         end
 
-      ["load-session", session_id | rest] ->
+      ["load-session", session_ref | rest] ->
         with {:ok, opts, _args} <- parse_opts(rest),
+             {:ok, session_id} <- expand_session_ref(session_ref, opts),
              {:ok, session} <- SessionStore.fetch(session_id, root: session_root_opt(opts)) do
           emit_value(session, opts, fn -> render_session(session, opts) end)
           0
         else
           :error ->
-            emit_error("Session not found: #{session_id}", json_requested?(rest))
+            emit_error("Session not found: #{session_ref}", json_requested?(rest))
+            1
+
+          {:error, :not_found} ->
+            emit_error("Session not found: #{session_ref}", json_requested?(rest))
             1
 
           {:error, message} ->
@@ -498,14 +510,19 @@ defmodule ClawCode.CLI do
     1
   end
 
-  defp run_cancel(session_id, rest) do
-    with {:ok, opts, _args} <- parse_opts(rest) do
+  defp run_cancel(session_ref, rest) do
+    with {:ok, opts, _args} <- parse_opts(rest),
+         {:ok, session_id} <- expand_session_ref(session_ref, opts) do
       if Keyword.get(opts, :daemon, false) do
         run_daemon_cancel(session_id, opts)
       else
         run_local_cancel(session_id, opts)
       end
     else
+      {:error, :not_found} ->
+        emit_error("Session not found: #{session_ref}", json_requested?(rest))
+        1
+
       {:error, message} ->
         IO.puts(message)
         1
@@ -615,6 +632,87 @@ defmodule ClawCode.CLI do
 
   defp session_root_opt(opts) do
     Keyword.get(opts, :session_root, SessionStore.root_dir())
+  end
+
+  defp expand_session_ref(session_ref, opts) do
+    if alias_or_index_session_ref?(session_ref) do
+      case resolve_session_ref(session_ref, opts) do
+        nil -> {:error, :not_found}
+        resolved -> {:ok, resolved}
+      end
+    else
+      {:ok, session_ref}
+    end
+  end
+
+  defp alias_or_index_session_ref?(session_ref) do
+    normalized = String.downcase(session_ref)
+
+    normalized in [
+      "latest",
+      "running",
+      "latest-running",
+      "completed",
+      "latest-completed",
+      "failed",
+      "latest-failed"
+    ] or match?({_, ""}, Integer.parse(session_ref))
+  end
+
+  defp resolve_session_ref(session_ref, opts) do
+    sessions =
+      SessionStore.list(
+        limit: max(Keyword.get(opts, :limit, 20), 100),
+        root: session_root_opt(opts)
+      )
+
+    normalized = String.downcase(session_ref)
+
+    case normalized do
+      "latest" -> first_session_id(sessions)
+      "running" -> first_matching_session_id(sessions, &session_running?/1)
+      "latest-running" -> first_matching_session_id(sessions, &session_running?/1)
+      "completed" -> first_matching_session_id(sessions, &session_completed?/1)
+      "latest-completed" -> first_matching_session_id(sessions, &session_completed?/1)
+      "failed" -> first_matching_session_id(sessions, &session_failed?/1)
+      "latest-failed" -> first_matching_session_id(sessions, &session_failed?/1)
+      _other -> resolve_session_index(session_ref, sessions)
+    end
+  end
+
+  defp resolve_session_index(session_ref, sessions) do
+    case Integer.parse(session_ref) do
+      {index, ""} when index > 0 ->
+        sessions
+        |> Enum.at(index - 1)
+        |> case do
+          nil -> nil
+          session -> session["id"]
+        end
+
+      _other ->
+        nil
+    end
+  end
+
+  defp first_session_id([session | _rest]), do: session["id"]
+  defp first_session_id([]), do: nil
+
+  defp first_matching_session_id(sessions, predicate) do
+    sessions
+    |> Enum.find(predicate)
+    |> case do
+      nil -> nil
+      session -> session["id"]
+    end
+  end
+
+  defp session_running?(session), do: get_in(session, ["run_state", "status"]) == "running"
+  defp session_completed?(session), do: session["stop_reason"] == "completed"
+
+  defp session_failed?(session) do
+    not session_running?(session) and not session_completed?(session) and
+      not is_nil(session["stop_reason"])
   end
 
   defp parse_opts(args, opts \\ []) do
@@ -795,8 +893,8 @@ defmodule ClawCode.CLI do
       route <prompt> [--limit N] [--native|--no-native]
       bootstrap <prompt> [--limit N] [--native|--no-native]
       chat <prompt> [--daemon] [--session-id ID] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--api-key-header HEADER] [--max-turns N] [--allow-shell] [--allow-write] [--tools|--no-tools] [--native|--no-native] [--session-root PATH] [--daemon-root PATH] [--json]
-      resume-session <session_id> <prompt> [--daemon] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--api-key-header HEADER] [--max-turns N] [--allow-shell] [--allow-write] [--tools|--no-tools] [--native|--no-native] [--session-root PATH] [--daemon-root PATH] [--json]
-      cancel-session <session_id> [--daemon] [--session-root PATH] [--daemon-root PATH] [--json]
+      resume-session <session_id|latest|running|latest-running|completed|latest-completed|failed|latest-failed|N> <prompt> [--daemon] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--api-key-header HEADER] [--max-turns N] [--allow-shell] [--allow-write] [--tools|--no-tools] [--native|--no-native] [--session-root PATH] [--daemon-root PATH] [--json]
+      cancel-session <session_id|latest|running|latest-running|completed|latest-completed|failed|latest-failed|N> [--daemon] [--session-root PATH] [--daemon-root PATH] [--json]
       symphony <prompt> [--limit N] [--native|--no-native]
       tui [--limit N] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--api-key-header HEADER] [--tools|--no-tools] [--daemon-root PATH] [--session-root PATH]
       turn-loop <prompt> ...
@@ -804,7 +902,7 @@ defmodule ClawCode.CLI do
       show-tool <name>
       exec-command <name> <prompt>
       exec-tool <name> <payload>
-      load-session <session_id> [--session-root PATH] [--show-messages] [--show-receipts] [--json]
+      load-session <session_id|latest|running|latest-running|completed|latest-completed|failed|latest-failed|N> [--session-root PATH] [--show-messages] [--show-receipts] [--json]
     """
   end
 end

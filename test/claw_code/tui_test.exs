@@ -187,6 +187,51 @@ defmodule ClawCode.TUITest do
     assert next_state.notice =~ "Probe missing_config"
   end
 
+  test "resume requires a selected session" do
+    state = %State{
+      opts: [],
+      daemon_status: %{"status" => "running"},
+      doctor: %{provider: "generic", model: %{value: "test-model"}, tool_policy: :auto},
+      all_sessions: [],
+      sessions: [],
+      session_filter: :all,
+      session_limit: 8,
+      session_root: System.tmp_dir!(),
+      selected_session_id: nil,
+      selected_session: nil
+    }
+
+    {:continue, next_state} = TUI.apply_command(state, "resume keep going")
+    assert next_state.notice =~ "No session selected"
+  end
+
+  test "resume target alias without a prompt is rejected" do
+    sessions = [
+      %{
+        "id" => "session-a",
+        "stop_reason" => "completed",
+        "messages" => [],
+        "tool_receipts" => []
+      }
+    ]
+
+    state = %State{
+      opts: [],
+      daemon_status: %{"status" => "running"},
+      doctor: %{provider: "generic", model: %{value: "test-model"}, tool_policy: :auto},
+      all_sessions: sessions,
+      sessions: sessions,
+      session_filter: :all,
+      session_limit: 8,
+      session_root: System.tmp_dir!(),
+      selected_session_id: "session-a",
+      selected_session: nil
+    }
+
+    {:continue, next_state} = TUI.apply_command(state, "resume latest")
+    assert next_state.notice =~ "Prompt is required"
+  end
+
   test "next and prev commands move the selected session" do
     sessions = [
       %{"id" => "session-a", "messages" => [], "tool_receipts" => []},
@@ -263,6 +308,9 @@ defmodule ClawCode.TUITest do
 
     {:continue, completed_state} = TUI.apply_command(state, "open completed")
     assert completed_state.selected_session_id == "session-latest"
+
+    {:continue, latest_completed_state} = TUI.apply_command(state, "open latest-completed")
+    assert latest_completed_state.selected_session_id == "session-latest"
 
     {:continue, failed_state} = TUI.apply_command(state, "open failed")
     assert failed_state.selected_session_id == "session-failed"

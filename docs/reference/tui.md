@@ -35,7 +35,8 @@ It stays intentionally small:
 - in-client `probe` for the active provider configuration
 - `next` and `prev` session navigation
 - session filtering, substring `find`, and list limits inside the client
-- `open latest`, `open running`, `open completed`, and `open failed`
+- `open latest`, `open latest-completed`, `open running`, `open completed`, and `open failed`
+- targeted `resume latest ...` and `resume completed ...`
 - explicit `tools auto|on|off`
 - `open`, `cancel`, `refresh`, `help`, and `quit`
 
@@ -48,10 +49,10 @@ The stable contract under the TUI is still JSON over the existing CLI:
 - `./claw_code daemon start --json`
 - `./claw_code daemon status --json`
 - `./claw_code chat --daemon --json ...`
-- `./claw_code resume-session <id> --daemon --json ...`
-- `./claw_code cancel-session <id> --daemon --json`
+- `./claw_code resume-session <id|latest|running|latest-running|completed|latest-completed|failed|latest-failed|N> --daemon --json ...`
+- `./claw_code cancel-session <id|latest|running|latest-running|completed|latest-completed|failed|latest-failed|N> --daemon --json`
 - `./claw_code sessions --json`
-- `./claw_code load-session <id> --json`
+- `./claw_code load-session <id|latest|running|latest-running|completed|latest-completed|failed|latest-failed|N> --json`
 
 This keeps the UI replaceable while the daemon/runtime semantics harden.
 

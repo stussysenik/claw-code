@@ -110,8 +110,8 @@ defmodule ClawCode.TUI do
       <<"chat ", prompt::binary>> ->
         send_chat(state, prompt, false)
 
-      <<"resume ", prompt::binary>> ->
-        send_chat(state, prompt, true)
+      <<"resume ", value::binary>> ->
+        resume_chat(state, value)
 
       <<"provider ", provider::binary>> ->
         set_provider(state, provider)
@@ -150,7 +150,7 @@ defmodule ClawCode.TUI do
       render_selected_session(state.selected_session),
       "",
       "## Commands",
-      "chat <prompt> | resume <prompt> | open <n|id|latest|running|completed|failed> | filter <all|running|completed|failed> | find <substring> | clear find | limit <n> | next | prev | cancel | provider <name|default> | model <name|default> | base-url <url> | clear base-url | tools auto|on|off | probe | refresh | help | quit"
+      "chat <prompt> | resume <prompt> | resume <n|id|latest|running|completed|failed> <prompt> | open <n|id|latest|latest-running|latest-completed|running|completed|failed> | filter <all|running|completed|failed> | find <substring> | clear find | limit <n> | next | prev | cancel | provider <name|default> | model <name|default> | base-url <url> | clear base-url | tools auto|on|off | probe | refresh | help | quit"
     ]
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join("\n")
@@ -250,28 +250,62 @@ defmodule ClawCode.TUI do
   end
 
   defp send_chat(%State{} = state, prompt, resume?) do
-    prompt = String.trim(prompt)
+    send_chat(state, prompt, resume?, nil)
+  end
 
-    if prompt == "" do
-      {:continue, %{state | notice: "Prompt is required."}}
-    else
-      chat_opts =
-        if resume? and state.selected_session_id do
-          Keyword.put(state.opts, :session_id, state.selected_session_id)
-        else
-          state.opts
+  defp send_chat(%State{} = state, prompt, resume?, resume_session_id) do
+    prompt = String.trim(prompt)
+    target_session_id = if(resume?, do: resume_session_id || state.selected_session_id)
+
+    cond do
+      prompt == "" ->
+        {:continue, %{state | notice: "Prompt is required."}}
+
+      resume? and is_nil(target_session_id) ->
+        {:continue, %{state | notice: "No session selected."}}
+
+      true ->
+        chat_opts =
+          if resume? do
+            Keyword.put(state.opts, :session_id, target_session_id)
+          else
+            state.opts
+          end
+
+        case Daemon.chat(prompt, chat_opts) do
+          {:ok, result} ->
+            refresh(
+              %{state | selected_session_id: result.session_id},
+              "Completed #{result.stop_reason} for #{result.session_id}."
+            )
+
+          {:error, reason} ->
+            {:continue, %{state | notice: "Chat failed: #{format_reason(reason)}"}}
+        end
+    end
+  end
+
+  defp resume_chat(%State{} = state, value) do
+    value = String.trim(value)
+
+    case String.split(value, ~r/\s+/, parts: 2, trim: true) do
+      [target, prompt] ->
+        case resolve_session_id(target, state.sessions, state.all_sessions) do
+          nil ->
+            send_chat(state, value, true)
+
+          session_id ->
+            send_chat(%{state | selected_session_id: session_id}, prompt, true, session_id)
         end
 
-      case Daemon.chat(prompt, chat_opts) do
-        {:ok, result} ->
-          refresh(
-            %{state | selected_session_id: result.session_id},
-            "Completed #{result.stop_reason} for #{result.session_id}."
-          )
+      [target] ->
+        case resolve_session_id(target, state.sessions, state.all_sessions) do
+          nil -> send_chat(state, target, true)
+          _session_id -> {:continue, %{state | notice: "Prompt is required."}}
+        end
 
-        {:error, reason} ->
-          {:continue, %{state | notice: "Chat failed: #{format_reason(reason)}"}}
-      end
+      [] ->
+        {:continue, %{state | notice: "Prompt is required."}}
     end
   end
 
@@ -492,10 +526,19 @@ defmodule ClawCode.TUI do
       "running" ->
         first_matching_session_id(all_sessions, &session_running?/1)
 
+      "latest-running" ->
+        first_matching_session_id(all_sessions, &session_running?/1)
+
       "completed" ->
         first_matching_session_id(all_sessions, &session_completed?/1)
 
+      "latest-completed" ->
+        first_matching_session_id(all_sessions, &session_completed?/1)
+
       "failed" ->
+        first_matching_session_id(all_sessions, &session_failed?/1)
+
+      "latest-failed" ->
         first_matching_session_id(all_sessions, &session_failed?/1)
 
       _other ->
@@ -605,7 +648,7 @@ defmodule ClawCode.TUI do
   end
 
   defp help_text do
-    "Commands: chat <prompt>, resume <prompt>, open <n|id|latest|running|completed|failed>, filter <all|running|completed|failed>, find <substring>, clear find, limit <n>, next, prev, cancel, provider <name|default>, model <name|default>, base-url <url>, clear base-url, tools auto|on|off, probe, refresh, help, quit"
+    "Commands: chat <prompt>, resume <prompt>, resume <n|id|latest|running|completed|failed> <prompt>, open <n|id|latest|latest-running|latest-completed|running|completed|failed>, filter <all|running|completed|failed>, find <substring>, clear find, limit <n>, next, prev, cancel, provider <name|default>, model <name|default>, base-url <url>, clear base-url, tools auto|on|off, probe, refresh, help, quit"
   end
 
   defp step_session(%State{sessions: []} = state, _offset) do

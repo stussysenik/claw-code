@@ -95,11 +95,14 @@ Sessions live under `.claw/sessions/` and can be resumed by explicit id.
 ```bash
 ./claw_code chat --session-id my-session --provider kimi "inspect this repo"
 ./claw_code resume-session my-session --provider kimi "continue from the last state"
+./claw_code resume-session latest --provider kimi "continue the latest session"
 ./claw_code sessions --limit 10
 ./claw_code sessions --limit 10 --query build
 ./claw_code cancel-session my-session
+./claw_code cancel-session latest-completed
 ./claw_code cancel-session my-session --daemon
 ./claw_code load-session my-session
+./claw_code load-session latest-completed
 ./claw_code load-session my-session --show-messages --show-receipts
 ```
 
@@ -122,7 +125,7 @@ The design goal is not a network service or a distributed node mesh. It is a bor
 
 The final UX can absolutely include a full terminal UI, and the correct layering stays engine first: the Elixir runtime and daemon remain the product core, and the TUI is a client over that control plane instead of the architectural center.
 
-`./claw_code tui` is the first in-repo slice of that client. It is intentionally minimal: recent sessions, selected transcript, tool receipts, in-client provider/model/base-url switching with reset-to-default, session filtering and limits, substring `find`, `open completed`, provider `probe`, and a command loop for `chat`, `resume`, `open`, `next`, `prev`, `cancel`, and `tools`.
+`./claw_code tui` is the first in-repo slice of that client. It is intentionally minimal: recent sessions, selected transcript, tool receipts, in-client provider/model/base-url switching with reset-to-default, session filtering and limits, substring `find`, `open latest-completed`, targeted `resume latest ...`, provider `probe`, and a command loop for `chat`, `resume`, `open`, `next`, `prev`, `cancel`, and `tools`.
 
 ## Provider Setup
 

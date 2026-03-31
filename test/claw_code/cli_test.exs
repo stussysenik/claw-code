@@ -400,6 +400,36 @@ defmodule ClawCode.CLITest do
     assert output =~ "run=idle"
   end
 
+  test "load-session accepts latest-completed alias" do
+    root = Path.join(System.tmp_dir!(), "claw-code-cli-load-session-alias-test")
+    previous_root = Application.get_env(:claw_code, :session_root)
+
+    on_exit(fn ->
+      if is_nil(previous_root) do
+        Application.delete_env(:claw_code, :session_root)
+      else
+        Application.put_env(:claw_code, :session_root, previous_root)
+      end
+    end)
+
+    Application.put_env(:claw_code, :session_root, root)
+
+    SessionStore.save(%{id: "session-running", run_state: %{"status" => "running"}, messages: []},
+      root: root
+    )
+
+    SessionStore.save(%{id: "session-completed", stop_reason: "completed", messages: []},
+      root: root
+    )
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["load-session", "latest-completed"]) == 0
+      end)
+
+    assert output =~ "session-completed"
+  end
+
   test "cancel-session stops an active run" do
     root =
       Path.join(System.tmp_dir!(), "claw-code-cli-cancel-session-test-#{SessionStore.new_id()}")
@@ -761,6 +791,120 @@ defmodule ClawCode.CLITest do
     assert length(session["messages"]) == 5
     assert Enum.at(session["messages"], 3)["content"] == "second prompt"
     assert List.last(session["messages"])["content"] == "second reply"
+  end
+
+  test "resume-session accepts latest alias on the daemon transport" do
+    session_root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-daemon-resume-latest-#{SessionStore.new_id()}")
+
+    daemon_root =
+      Path.join(
+        System.tmp_dir!(),
+        "claw-code-cli-daemon-resume-latest-meta-#{SessionStore.new_id()}"
+      )
+
+    previous_session_root = Application.get_env(:claw_code, :session_root)
+    previous_daemon_root = Application.get_env(:claw_code, :daemon_root)
+
+    on_exit(fn ->
+      if is_nil(previous_session_root) do
+        Application.delete_env(:claw_code, :session_root)
+      else
+        Application.put_env(:claw_code, :session_root, previous_session_root)
+      end
+
+      if is_nil(previous_daemon_root) do
+        Application.delete_env(:claw_code, :daemon_root)
+      else
+        Application.put_env(:claw_code, :daemon_root, previous_daemon_root)
+      end
+
+      case Daemon.stop(daemon_root: daemon_root) do
+        {:ok, _result} -> :ok
+        _other -> :ok
+      end
+
+      File.rm_rf(session_root)
+      File.rm_rf(daemon_root)
+    end)
+
+    Application.put_env(:claw_code, :session_root, session_root)
+    Application.put_env(:claw_code, :daemon_root, daemon_root)
+    File.rm_rf(session_root)
+    File.rm_rf(daemon_root)
+
+    {base_url, listener, server} =
+      start_stub_server([
+        Jason.encode!(%{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "first reply"}}]
+        }),
+        Jason.encode!(%{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "latest reply"}}]
+        })
+      ])
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    {:ok, daemon_task} =
+      Task.start_link(fn ->
+        Daemon.serve(daemon_root: daemon_root)
+      end)
+
+    on_exit(fn ->
+      if Process.alive?(daemon_task), do: Process.exit(daemon_task, :kill)
+    end)
+
+    assert wait_until(fn ->
+             match?({:ok, %{"status" => "running"}}, Daemon.status(daemon_root: daemon_root))
+           end)
+
+    first_output =
+      capture_io(fn ->
+        assert CLI.run([
+                 "chat",
+                 "--daemon",
+                 "--provider",
+                 "generic",
+                 "--base-url",
+                 base_url,
+                 "--api-key",
+                 "test-key",
+                 "--model",
+                 "test-model",
+                 "--session-id",
+                 "cli-daemon-resume-latest",
+                 "first prompt"
+               ]) == 0
+      end)
+
+    second_output =
+      capture_io(fn ->
+        assert CLI.run([
+                 "resume-session",
+                 "latest",
+                 "--daemon",
+                 "--provider",
+                 "generic",
+                 "--base-url",
+                 base_url,
+                 "--api-key",
+                 "test-key",
+                 "--model",
+                 "test-model",
+                 "second prompt"
+               ]) == 0
+      end)
+
+    assert first_output =~ "Stop reason: completed"
+    assert second_output =~ "Stop reason: completed"
+    assert second_output =~ "latest reply"
+
+    session = SessionStore.load("cli-daemon-resume-latest", root: session_root)
+    assert length(session["messages"]) == 5
+    assert Enum.at(session["messages"], 3)["content"] == "second prompt"
   end
 
   test "cancel-session can use the daemon transport" do
