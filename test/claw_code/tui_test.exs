@@ -175,6 +175,10 @@ defmodule ClawCode.TUITest do
     assert follow_state.notice =~ "Follow set to running"
     assert TUI.render(follow_state) =~ "follow=running"
 
+    {:continue, active_state} = TUI.apply_command(follow_state, "follow active")
+    assert active_state.follow_target == "active"
+    assert active_state.notice =~ "Follow set to active"
+
     {:continue, off_state} = TUI.apply_command(follow_state, "follow off")
     assert off_state.follow_target == nil
     assert off_state.notice =~ "Follow disabled"
@@ -217,6 +221,48 @@ defmodule ClawCode.TUITest do
     assert refreshed_state.selected_session["id"] == "session-running"
   end
 
+  test "focus active configures a running-session monitoring preset" do
+    root = Path.join(System.tmp_dir!(), "claw-code-tui-focus-#{SessionStore.new_id()}")
+    File.rm_rf(root)
+
+    on_exit(fn -> File.rm_rf(root) end)
+
+    SessionStore.save(%{id: "session-completed", stop_reason: "completed", messages: []},
+      root: root
+    )
+
+    SessionStore.save(
+      %{
+        id: "session-running",
+        stop_reason: "running",
+        run_state: %{"status" => "running", "started_at" => "2026-03-31T23:30:00Z"},
+        messages: [%{"role" => "assistant", "content" => "still working"}]
+      },
+      root: root
+    )
+
+    state =
+      TUI.build_state(
+        [provider: "generic"],
+        %{"status" => "running", "session_root" => root},
+        nil
+      )
+
+    {:continue, focused_state} = TUI.apply_command(state, "focus active")
+    assert focused_state.session_filter == :running
+    assert focused_state.follow_target == "running"
+    assert focused_state.watch_interval_ms == 1_000
+    assert focused_state.selected_session_id == "session-running"
+    assert focused_state.notice =~ "active sessions"
+    assert TUI.render(focused_state) =~ "watch=1s follow=running"
+
+    {:continue, reset_state} = TUI.apply_command(focused_state, "focus all")
+    assert reset_state.session_filter == :all
+    assert reset_state.follow_target == nil
+    assert reset_state.watch_interval_ms == nil
+    assert reset_state.notice =~ "all sessions"
+  end
+
   test "open command selects a session by index" do
     sessions = [
       %{"id" => "session-a", "messages" => [], "tool_receipts" => []},
@@ -240,6 +286,41 @@ defmodule ClawCode.TUITest do
 
     assert next_state.selected_session_id == "session-b"
     assert next_state.notice =~ "Opened session session-b"
+  end
+
+  test "open active selects the running session" do
+    sessions = [
+      %{
+        "id" => "session-completed",
+        "stop_reason" => "completed",
+        "messages" => [],
+        "tool_receipts" => []
+      },
+      %{
+        "id" => "session-running",
+        "stop_reason" => "running",
+        "run_state" => %{"status" => "running"},
+        "messages" => [],
+        "tool_receipts" => []
+      }
+    ]
+
+    state = %State{
+      opts: [],
+      daemon_status: %{"status" => "running"},
+      doctor: %{provider: "generic", model: %{value: "test-model"}, tool_policy: :auto},
+      all_sessions: sessions,
+      sessions: sessions,
+      session_filter: :all,
+      session_limit: 8,
+      session_root: System.tmp_dir!(),
+      selected_session_id: "session-completed",
+      selected_session: nil
+    }
+
+    {:continue, next_state} = TUI.apply_command(state, "open active")
+    assert next_state.selected_session_id == "session-running"
+    assert next_state.notice =~ "Opened session session-running"
   end
 
   test "tools command updates local tool mode" do

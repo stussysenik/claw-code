@@ -116,6 +116,9 @@ defmodule ClawCode.TUI do
       <<"follow ", value::binary>> ->
         set_follow_target(state, value)
 
+      <<"focus ", value::binary>> ->
+        set_focus_mode(state, value)
+
       "clear find-msg" ->
         clear_transcript_query(state)
 
@@ -188,7 +191,7 @@ defmodule ClawCode.TUI do
       render_selected_session(state),
       "",
       "## Commands",
-      "chat <prompt> | resume <prompt> | resume <n|id|latest|running|completed|failed> <prompt> | open <n|id|latest|latest-running|latest-completed|running|completed|failed> | filter <all|running|completed|failed> | find <substring> | clear find | watch <seconds|on|off> | follow <latest|running|latest-running|completed|failed|off> | find-msg <substring> | clear find-msg | next-hit | prev-hit | limit <n> | next | prev | cancel | provider <name|default> | model <name|default> | base-url <url> | clear base-url | tools auto|on|off | probe | refresh | help | quit"
+      "chat <prompt> | resume <prompt> | resume <n|id|latest|active|running|completed|failed> <prompt> | open <n|id|latest|active|latest-running|latest-completed|running|completed|failed> | filter <all|running|completed|failed> | find <substring> | clear find | watch <seconds|on|off> | follow <latest|active|running|latest-running|completed|failed|off> | focus <active|all> | find-msg <substring> | clear find-msg | next-hit | prev-hit | limit <n> | next | prev | cancel | provider <name|default> | model <name|default> | base-url <url> | clear base-url | tools auto|on|off | probe | refresh | help | quit"
     ]
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join("\n")
@@ -566,6 +569,33 @@ defmodule ClawCode.TUI do
     end
   end
 
+  defp set_focus_mode(%State{} = state, value) do
+    case String.trim(String.downcase(value)) do
+      "active" ->
+        next_state =
+          state
+          |> Map.put(:session_filter, :running)
+          |> Map.put(:follow_target, "running")
+          |> Map.put(:watch_interval_ms, 1_000)
+          |> apply_focus_refresh("Focus set to active sessions.")
+
+        {:continue, next_state}
+
+      "all" ->
+        next_state =
+          state
+          |> Map.put(:session_filter, :all)
+          |> Map.put(:follow_target, nil)
+          |> Map.put(:watch_interval_ms, nil)
+          |> apply_focus_refresh("Focus reset to all sessions.")
+
+        {:continue, next_state}
+
+      other ->
+        {:continue, %{state | notice: "Unknown focus mode: #{other}"}}
+    end
+  end
+
   defp set_transcript_query(%State{} = state, value) do
     transcript_query = normalize_transcript_query(value)
 
@@ -637,6 +667,14 @@ defmodule ClawCode.TUI do
     {:continue, next_state}
   end
 
+  defp apply_focus_refresh(%State{} = state, notice) do
+    state.opts
+    |> build_state(refresh_daemon_status(state), notice, ui_state(state))
+    |> preserve_selection(state.selected_session_id)
+    |> apply_follow_target()
+    |> normalize_transcript_state()
+  end
+
   defp ui_state(%State{} = state) do
     %{
       session_filter: state.session_filter || :all,
@@ -685,6 +723,9 @@ defmodule ClawCode.TUI do
     case normalized do
       "latest" ->
         first_session_id(all_sessions)
+
+      "active" ->
+        first_matching_session_id(all_sessions, &session_running?/1)
 
       "running" ->
         first_matching_session_id(all_sessions, &session_running?/1)
@@ -876,7 +917,7 @@ defmodule ClawCode.TUI do
   end
 
   defp help_text do
-    "Commands: chat <prompt>, resume <prompt>, resume <n|id|latest|running|completed|failed> <prompt>, open <n|id|latest|latest-running|latest-completed|running|completed|failed>, filter <all|running|completed|failed>, find <substring>, clear find, watch <seconds|on|off>, follow <latest|running|latest-running|completed|failed|off>, find-msg <substring>, clear find-msg, next-hit, prev-hit, limit <n>, next, prev, cancel, provider <name|default>, model <name|default>, base-url <url>, clear base-url, tools auto|on|off, probe, refresh, help, quit"
+    "Commands: chat <prompt>, resume <prompt>, resume <n|id|latest|active|running|completed|failed> <prompt>, open <n|id|latest|active|latest-running|latest-completed|running|completed|failed>, filter <all|running|completed|failed>, find <substring>, clear find, watch <seconds|on|off>, follow <latest|active|running|latest-running|completed|failed|off>, focus <active|all>, find-msg <substring>, clear find-msg, next-hit, prev-hit, limit <n>, next, prev, cancel, provider <name|default>, model <name|default>, base-url <url>, clear base-url, tools auto|on|off, probe, refresh, help, quit"
   end
 
   defp step_session(%State{sessions: []} = state, _offset) do
@@ -988,6 +1029,7 @@ defmodule ClawCode.TUI do
         normalized = String.downcase(target)
 
         if normalized in [
+             "active",
              "latest",
              "running",
              "latest-running",
