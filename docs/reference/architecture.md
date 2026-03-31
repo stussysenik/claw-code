@@ -107,6 +107,7 @@ The operator layer should stay explicit:
 - `chat` vs `chat --daemon`
 - `cancel-session` vs `cancel-session --daemon`
 - `--session-root` and `--daemon-root` for isolated roots
+- `--json` for thin client and TUI integration
 - `--tools` and `--no-tools` for explicit tool-calling control
 - Ralph loops for validation instead of ad hoc shell rituals
 

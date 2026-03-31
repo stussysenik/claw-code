@@ -126,6 +126,8 @@ Provider contracts are documented in [docs/providers.md](./docs/providers.md). `
 
 `chat` and `resume-session` default to an `auto` tool policy: repo or tool-oriented prompts expose local tools, plain chat prompts do not. Use `--tools` to force tool specs on, `--no-tools` to force a chat-only request, or `CLAW_TOOL_MODE=auto|on|off` to set the default behavior across local and daemon-backed runs.
 
+Core operator commands now also support `--json`, which is the intended first contract for a future terminal UI client. The boundary is documented in [docs/reference/tui.md](./docs/reference/tui.md).
+
 `./claw_code doctor` now reports whether the active provider is fully configured, which request URL will be used, and whether each field came from an env var, a default, or is still missing.
 
 ## Release Automation
@@ -147,6 +149,7 @@ The release lane generates tags, updates `CHANGELOG.md`, and publishes GitHub Re
 - `native/` contains the isolated Zig helper boundary.
 - `docs/` contains backlog and execution-plan material.
 - `docs/providers.md` records the provider env contract for `generic`, `glm`, `kimi`, and `nim`.
+- `docs/reference/tui.md` records the client boundary for a future terminal UI.
 - `.omx/` contains the operator board, team split, checklists, and mission briefs.
 - `scripts/` contains the canonical Ralph loops, QA dispatcher, and validation gate.
 - `.claw/sessions/` stores resumable session state with message history and tool receipts.

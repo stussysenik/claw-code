@@ -18,6 +18,17 @@ defmodule ClawCode.CLITest do
     assert output =~ "- missing:"
   end
 
+  test "doctor can render json" do
+    output =
+      capture_io(fn ->
+        assert CLI.run(["doctor", "--provider", "generic", "--no-tools", "--json"]) == 0
+      end)
+
+    payload = Jason.decode!(output)
+    assert payload["provider"] == "generic"
+    assert payload["tool_policy"] == "disabled"
+  end
+
   test "doctor accepts provider flags" do
     output =
       capture_io(fn ->
@@ -216,6 +227,33 @@ defmodule ClawCode.CLITest do
     assert output =~ "session-a"
     assert output =~ "session-b"
     assert output =~ "run=idle"
+  end
+
+  test "sessions command can render json" do
+    root = Path.join(System.tmp_dir!(), "claw-code-cli-sessions-json-test")
+    previous_root = Application.get_env(:claw_code, :session_root)
+
+    on_exit(fn ->
+      if is_nil(previous_root) do
+        Application.delete_env(:claw_code, :session_root)
+      else
+        Application.put_env(:claw_code, :session_root, previous_root)
+      end
+    end)
+
+    Application.put_env(:claw_code, :session_root, root)
+
+    SessionStore.save(%{id: "session-json", prompt: "hello", output: "world", messages: []},
+      root: root
+    )
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["sessions", "--limit", "5", "--json"]) == 0
+      end)
+
+    payload = Jason.decode!(output)
+    assert [%{"id" => "session-json"} | _rest] = payload["sessions"]
   end
 
   test "load-session can render messages and receipts" do
@@ -841,6 +879,17 @@ defmodule ClawCode.CLITest do
     assert output =~ "Stop reason: missing_provider_config"
   end
 
+  test "chat can render json result" do
+    output =
+      capture_io(fn ->
+        assert CLI.run(["chat", "--provider", "generic", "--json", "hello"]) == 1
+      end)
+
+    payload = Jason.decode!(output)
+    assert payload["provider"] == "generic"
+    assert payload["stop_reason"] == "missing_provider_config"
+  end
+
   test "chat rejects an unknown provider" do
     output =
       capture_io(fn ->
@@ -848,6 +897,16 @@ defmodule ClawCode.CLITest do
       end)
 
     assert output =~ "Unknown provider: kimii"
+  end
+
+  test "chat renders json errors when requested" do
+    output =
+      capture_io(fn ->
+        assert CLI.run(["chat", "--provider", "kimii", "--json", "hello"]) == 1
+      end)
+
+    payload = Jason.decode!(output)
+    assert payload["error"] =~ "Unknown provider: kimii"
   end
 
   test "chat rejects invalid switches" do

@@ -41,31 +41,63 @@ defmodule ClawCode.Manifest do
   end
 
   def render_doctor(opts \\ []) do
-    config = OpenAICompatible.resolve_config(opts)
-    diagnostics = OpenAICompatible.diagnostics(opts)
-    facts = Host.kernel_facts()
+    payload = doctor_payload(opts)
 
     [
       "# Doctor",
       "",
-      "- elixir: #{facts.elixir}",
-      "- otp: #{facts.otp}",
-      "- uname: #{facts.uname}",
-      "- shell: #{facts.shell}",
-      "- zig: #{exec("zig")}",
-      "- python3: #{runtime_engine(:python)}",
-      "- lua: #{runtime_engine(:lua)}",
-      "- common_lisp: #{runtime_engine(:common_lisp)}",
-      "- provider: #{config.provider}",
-      "- configured: #{diagnostics.configured}",
-      "- tool_policy: #{Runtime.tool_policy(opts)}",
-      "- request_url: #{diagnostics.request_url || "missing"}",
-      "- base_url: #{config.base_url || "missing"} (#{diagnostics.fields.base_url.source})",
-      "- api_key: #{mask(config.api_key)} (#{diagnostics.fields.api_key.source})",
-      "- model: #{config.model || "missing"} (#{diagnostics.fields.model.source})",
-      "- missing: #{render_missing_fields(diagnostics.missing_fields)}"
+      "- elixir: #{payload.elixir}",
+      "- otp: #{payload.otp}",
+      "- uname: #{payload.uname}",
+      "- shell: #{payload.shell}",
+      "- zig: #{payload.zig}",
+      "- python3: #{payload.python3}",
+      "- lua: #{payload.lua}",
+      "- common_lisp: #{payload.common_lisp}",
+      "- provider: #{payload.provider}",
+      "- configured: #{payload.configured}",
+      "- tool_policy: #{payload.tool_policy}",
+      "- request_url: #{payload.request_url || "missing"}",
+      "- base_url: #{payload.base_url.value || "missing"} (#{payload.base_url.source})",
+      "- api_key: #{payload.api_key.masked} (#{payload.api_key.source})",
+      "- model: #{payload.model.value || "missing"} (#{payload.model.source})",
+      "- missing: #{render_missing_fields(payload.missing)}"
     ]
     |> Enum.join("\n")
+  end
+
+  def doctor_payload(opts \\ []) do
+    config = OpenAICompatible.resolve_config(opts)
+    diagnostics = OpenAICompatible.diagnostics(opts)
+    facts = Host.kernel_facts()
+
+    %{
+      elixir: facts.elixir,
+      otp: to_string(facts.otp),
+      uname: facts.uname,
+      shell: facts.shell,
+      zig: exec("zig"),
+      python3: runtime_engine(:python),
+      lua: runtime_engine(:lua),
+      common_lisp: runtime_engine(:common_lisp),
+      provider: config.provider,
+      configured: diagnostics.configured,
+      tool_policy: Runtime.tool_policy(opts),
+      request_url: diagnostics.request_url,
+      base_url: %{
+        value: config.base_url,
+        source: diagnostics.fields.base_url.source
+      },
+      api_key: %{
+        masked: mask(config.api_key),
+        source: diagnostics.fields.api_key.source
+      },
+      model: %{
+        value: config.model,
+        source: diagnostics.fields.model.source
+      },
+      missing: diagnostics.missing_fields
+    }
   end
 
   defp exec(name) do

@@ -27,6 +27,7 @@ defmodule ClawCode.CLI do
     allow_write: :boolean,
     tools: :boolean,
     no_tools: :boolean,
+    json: :boolean,
     show_messages: :boolean,
     show_receipts: :boolean,
     daemon: :boolean,
@@ -55,11 +56,11 @@ defmodule ClawCode.CLI do
 
       ["doctor" | rest] ->
         with {:ok, opts, _args} <- parse_opts(rest, validate_provider: true) do
-          IO.puts(Manifest.render_doctor(opts))
+          emit_value(Manifest.doctor_payload(opts), opts, fn -> Manifest.render_doctor(opts) end)
           0
         else
           {:error, message} ->
-            IO.puts(message)
+            emit_error(message, json_requested?(rest))
             1
         end
 
@@ -69,11 +70,16 @@ defmodule ClawCode.CLI do
       ["sessions" | rest] ->
         with {:ok, opts, _args} <- parse_opts(rest) do
           limit = Keyword.get(opts, :limit, 20)
-          IO.puts(render_sessions(SessionStore.list(limit: limit, root: session_root_opt(opts))))
+          sessions = SessionStore.list(limit: limit, root: session_root_opt(opts))
+
+          emit_value(%{sessions: Enum.map(sessions, &session_summary/1)}, opts, fn ->
+            render_sessions(sessions)
+          end)
+
           0
         else
           {:error, message} ->
-            IO.puts(message)
+            emit_error(message, json_requested?(rest))
             1
         end
 
@@ -127,11 +133,14 @@ defmodule ClawCode.CLI do
 
       ["bootstrap" | rest] ->
         with {:ok, opts, args} <- parse_opts(rest, validate_provider: true) do
-          IO.puts(Runtime.bootstrap(join_args(args), opts))
+          emit_value(%{bootstrap: Runtime.bootstrap(join_args(args), opts)}, opts, fn ->
+            Runtime.bootstrap(join_args(args), opts)
+          end)
+
           0
         else
           {:error, message} ->
-            IO.puts(message)
+            emit_error(message, json_requested?(rest))
             1
         end
 
@@ -140,7 +149,7 @@ defmodule ClawCode.CLI do
           run_chat(join_args(args), opts)
         else
           {:error, message} ->
-            IO.puts(message)
+            emit_error(message, json_requested?(rest))
             1
         end
 
@@ -150,7 +159,7 @@ defmodule ClawCode.CLI do
           run_chat(join_args(args), opts)
         else
           {:error, message} ->
-            IO.puts(message)
+            emit_error(message, json_requested?(rest))
             1
         end
 
@@ -226,15 +235,15 @@ defmodule ClawCode.CLI do
       ["load-session", session_id | rest] ->
         with {:ok, opts, _args} <- parse_opts(rest),
              {:ok, session} <- SessionStore.fetch(session_id, root: session_root_opt(opts)) do
-          IO.puts(render_session(session, opts))
+          emit_value(session, opts, fn -> render_session(session, opts) end)
           0
         else
           :error ->
-            IO.puts("Session not found: #{session_id}")
+            emit_error("Session not found: #{session_id}", json_requested?(rest))
             1
 
           {:error, message} ->
-            IO.puts(message)
+            emit_error(message, json_requested?(rest))
             1
         end
 
@@ -280,17 +289,23 @@ defmodule ClawCode.CLI do
       "# Sessions",
       "",
       Enum.map_join(sessions, "\n", fn session ->
-        id = session["id"]
-        updated_at = session["updated_at"] || session["saved_at"] || "unknown"
-        stop_reason = session["stop_reason"] || "unknown"
-        run_status = get_in(session, ["run_state", "status"]) || "unknown"
-        messages = length(session["messages"] || [])
-        receipts = length(session["tool_receipts"] || [])
+        summary = session_summary(session)
 
-        "#{id}\t#{updated_at}\trun=#{run_status}\tstop=#{stop_reason}\tmessages=#{messages}\treceipts=#{receipts}"
+        "#{summary.id}\t#{summary.updated_at}\trun=#{summary.run_status}\tstop=#{summary.stop_reason}\tmessages=#{summary.message_count}\treceipts=#{summary.receipt_count}"
       end)
     ]
     |> Enum.join("\n")
+  end
+
+  defp session_summary(session) do
+    %{
+      id: session["id"],
+      updated_at: session["updated_at"] || session["saved_at"] || "unknown",
+      stop_reason: session["stop_reason"] || "unknown",
+      run_status: get_in(session, ["run_state", "status"]) || "unknown",
+      message_count: length(session["messages"] || []),
+      receipt_count: length(session["tool_receipts"] || [])
+    }
   end
 
   defp render_session(session, opts) do
@@ -391,7 +406,7 @@ defmodule ClawCode.CLI do
       run_daemon_chat(prompt, opts)
     else
       result = Runtime.chat(prompt, opts)
-      IO.puts(render_chat_result(result))
+      emit_value(result, opts, fn -> render_chat_result(result) end)
       chat_exit_code(result)
     end
   end
@@ -399,11 +414,11 @@ defmodule ClawCode.CLI do
   defp run_daemon(["start" | rest]) do
     with {:ok, opts, _args} <- parse_opts(rest),
          {:ok, status} <- normalize_daemon_result(Daemon.start_background(opts)) do
-      IO.puts(render_daemon_status(status))
+      emit_value(status, opts, fn -> render_daemon_status(status) end)
       0
     else
       {:error, message} ->
-        IO.puts(message)
+        emit_error(message, json_requested?(rest))
         1
     end
   end
@@ -414,7 +429,7 @@ defmodule ClawCode.CLI do
       0
     else
       {:error, message} ->
-        IO.puts(message)
+        emit_error(message, json_requested?(rest))
         1
     end
   end
@@ -422,11 +437,11 @@ defmodule ClawCode.CLI do
   defp run_daemon(["status" | rest]) do
     with {:ok, opts, _args} <- parse_opts(rest),
          {:ok, status} <- normalize_daemon_result(Daemon.status(opts)) do
-      IO.puts(render_daemon_status(status))
+      emit_value(status, opts, fn -> render_daemon_status(status) end)
       0
     else
       {:error, message} ->
-        IO.puts(message)
+        emit_error(message, json_requested?(rest))
         1
     end
   end
@@ -434,11 +449,11 @@ defmodule ClawCode.CLI do
   defp run_daemon(["stop" | rest]) do
     with {:ok, opts, _args} <- parse_opts(rest),
          {:ok, result} <- normalize_daemon_result(Daemon.stop(opts)) do
-      IO.puts(render_daemon_stop(result))
+      emit_value(result, opts, fn -> render_daemon_stop(result) end)
       0
     else
       {:error, message} ->
-        IO.puts(message)
+        emit_error(message, json_requested?(rest))
         1
     end
   end
@@ -464,47 +479,50 @@ defmodule ClawCode.CLI do
 
   defp run_local_cancel(session_id, opts) do
     with {:ok, _cancelled} <- normalize_cancel(Runtime.cancel(session_id, opts)) do
-      IO.puts("Cancelled session in this runtime: #{session_id}")
+      emit_value(%{session_id: session_id, transport: "local", cancelled: true}, opts, fn ->
+        "Cancelled session in this runtime: #{session_id}"
+      end)
+
       0
     else
       {:error, :not_found} ->
-        IO.puts("Session not found: #{session_id}")
+        emit_error("Session not found: #{session_id}", opts)
         1
 
       {:error, :not_running} ->
-        IO.puts("Session is not running in this runtime: #{session_id}")
+        emit_error("Session is not running in this runtime: #{session_id}", opts)
         1
 
       {:error, message} when is_binary(message) ->
-        IO.puts(message)
+        emit_error(message, opts)
         1
     end
   end
 
   defp run_daemon_cancel(session_id, opts) do
     case Daemon.cancel_session(session_id, opts) do
-      {:ok, _cancelled} ->
-        IO.puts("Cancelled session via daemon: #{session_id}")
+      {:ok, cancelled} ->
+        emit_value(cancelled, opts, fn -> "Cancelled session via daemon: #{session_id}" end)
         0
 
       {:error, :not_found} ->
-        IO.puts("Session not found: #{session_id}")
+        emit_error("Session not found: #{session_id}", opts)
         1
 
       {:error, :session_not_running} ->
-        IO.puts("Session is not running in the daemon: #{session_id}")
+        emit_error("Session is not running in the daemon: #{session_id}", opts)
         1
 
       {:error, :not_running} ->
-        IO.puts("Daemon is not running.")
+        emit_error("Daemon is not running.", opts)
         1
 
       {:error, message} when is_binary(message) ->
-        IO.puts(message)
+        emit_error(message, opts)
         1
 
       {:error, reason} ->
-        IO.puts("Daemon cancel failed: #{inspect(reason)}")
+        emit_error("Daemon cancel failed: #{inspect(reason)}", opts)
         1
     end
   end
@@ -512,19 +530,19 @@ defmodule ClawCode.CLI do
   defp run_daemon_chat(prompt, opts) do
     case Daemon.chat(prompt, opts) do
       {:ok, result} ->
-        IO.puts(render_chat_result(result))
+        emit_value(result, opts, fn -> render_chat_result(result) end)
         chat_exit_code(result)
 
       {:error, :not_running} ->
-        IO.puts("Daemon is not running. Start it with `./claw_code daemon start`.")
+        emit_error("Daemon is not running. Start it with `./claw_code daemon start`.", opts)
         1
 
       {:error, message} when is_binary(message) ->
-        IO.puts(message)
+        emit_error(message, opts)
         1
 
       {:error, reason} ->
-        IO.puts("Daemon chat failed: #{inspect(reason)}")
+        emit_error("Daemon chat failed: #{inspect(reason)}", opts)
         1
     end
   end
@@ -644,6 +662,45 @@ defmodule ClawCode.CLI do
     end
   end
 
+  defp emit_value(value, opts, renderer) do
+    if Keyword.get(opts, :json, false) do
+      IO.puts(render_json(value))
+    else
+      IO.puts(renderer.())
+    end
+  end
+
+  defp emit_error(message, opts_or_flag) do
+    if json_enabled?(opts_or_flag) do
+      IO.puts(render_json(%{error: message}))
+    else
+      IO.puts(message)
+    end
+  end
+
+  defp json_enabled?(flag) when is_boolean(flag), do: flag
+  defp json_enabled?(opts) when is_list(opts), do: Keyword.get(opts, :json, false)
+
+  defp json_requested?(args) do
+    Enum.any?(args, &(&1 == "--json"))
+  end
+
+  defp render_json(value) do
+    Jason.encode!(json_safe(value), pretty: true)
+  end
+
+  defp json_safe(%_struct{} = struct), do: struct |> Map.from_struct() |> json_safe()
+
+  defp json_safe(map) when is_map(map) do
+    Enum.into(map, %{}, fn
+      {key, value} when is_atom(key) -> {Atom.to_string(key), json_safe(value)}
+      {key, value} -> {key, json_safe(value)}
+    end)
+  end
+
+  defp json_safe(list) when is_list(list), do: Enum.map(list, &json_safe/1)
+  defp json_safe(value), do: value
+
   defp summarize_text(nil), do: ""
 
   defp summarize_text(value) when is_binary(value) do
@@ -665,26 +722,26 @@ defmodule ClawCode.CLI do
     Commands:
       summary
       manifest
-      doctor [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--tools|--no-tools]
+      doctor [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--tools|--no-tools] [--json]
       daemon serve [--daemon-root PATH] [--session-root PATH]
-      daemon start [--daemon-root PATH] [--session-root PATH]
-      daemon status [--daemon-root PATH]
-      daemon stop [--daemon-root PATH]
-      sessions [--limit N] [--session-root PATH]
+      daemon start [--daemon-root PATH] [--session-root PATH] [--json]
+      daemon status [--daemon-root PATH] [--json]
+      daemon stop [--daemon-root PATH] [--json]
+      sessions [--limit N] [--session-root PATH] [--json]
       commands [--limit N] [--query TEXT]
       tools [--limit N] [--query TEXT] [--deny-tool NAME] [--deny-prefix PREFIX]
       route <prompt> [--limit N] [--native|--no-native]
       bootstrap <prompt> [--limit N] [--native|--no-native]
-      chat <prompt> [--daemon] [--session-id ID] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--max-turns N] [--allow-shell] [--allow-write] [--tools|--no-tools] [--native|--no-native] [--session-root PATH] [--daemon-root PATH]
-      resume-session <session_id> <prompt> [--daemon] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--max-turns N] [--allow-shell] [--allow-write] [--tools|--no-tools] [--native|--no-native] [--session-root PATH] [--daemon-root PATH]
-      cancel-session <session_id> [--daemon] [--session-root PATH] [--daemon-root PATH]
+      chat <prompt> [--daemon] [--session-id ID] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--max-turns N] [--allow-shell] [--allow-write] [--tools|--no-tools] [--native|--no-native] [--session-root PATH] [--daemon-root PATH] [--json]
+      resume-session <session_id> <prompt> [--daemon] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--max-turns N] [--allow-shell] [--allow-write] [--tools|--no-tools] [--native|--no-native] [--session-root PATH] [--daemon-root PATH] [--json]
+      cancel-session <session_id> [--daemon] [--session-root PATH] [--daemon-root PATH] [--json]
       symphony <prompt> [--limit N] [--native|--no-native]
       turn-loop <prompt> ...
       show-command <name>
       show-tool <name>
       exec-command <name> <prompt>
       exec-tool <name> <payload>
-      load-session <session_id> [--session-root PATH] [--show-messages] [--show-receipts]
+      load-session <session_id> [--session-root PATH] [--show-messages] [--show-receipts] [--json]
     """
   end
 end
