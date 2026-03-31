@@ -1,2 +1,13 @@
 __pycache__/
 archive/
+_build/
+deps/
+node_modules/
+.elixir_ls/
+.claw/
+.omx/logs/
+.omx/state/
+.omx/tmp/
+erl_crash.dump
+priv/native/token_ranker
+/claw_code
