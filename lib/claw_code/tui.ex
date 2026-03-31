@@ -101,6 +101,9 @@ defmodule ClawCode.TUI do
       "cancel" ->
         cancel_selected(state)
 
+      <<"cancel ", value::binary>> ->
+        cancel_target(state, value)
+
       <<"filter ", filter::binary>> ->
         set_session_filter(state, filter)
 
@@ -191,7 +194,7 @@ defmodule ClawCode.TUI do
       render_selected_session(state),
       "",
       "## Commands",
-      "chat <prompt> | resume <prompt> | resume <n|id|latest|active|running|completed|failed> <prompt> | open <n|id|latest|active|latest-running|latest-completed|running|completed|failed> | filter <all|running|completed|failed> | find <substring> | clear find | watch <seconds|on|off> | follow <latest|active|running|latest-running|completed|failed|off> | focus <active|all> | find-msg <substring> | clear find-msg | next-hit | prev-hit | limit <n> | next | prev | cancel | provider <name|default> | model <name|default> | base-url <url> | clear base-url | tools auto|on|off | probe | refresh | help | quit"
+      "chat <prompt> | resume <prompt> | resume <n|id|latest|active|running|completed|failed> <prompt> | open <n|id|latest|active|latest-running|latest-completed|running|completed|failed> | cancel [selected|n|id|latest|active|running|completed|failed] | filter <all|running|completed|failed> | find <substring> | clear find | watch <seconds|on|off> | follow <latest|active|running|latest-running|completed|failed|off> | focus <active|all> | find-msg <substring> | clear find-msg | next-hit | prev-hit | limit <n> | next | prev | provider <name|default> | model <name|default> | base-url <url> | clear base-url | tools auto|on|off | probe | refresh | help | quit"
     ]
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join("\n")
@@ -367,9 +370,31 @@ defmodule ClawCode.TUI do
   end
 
   defp cancel_selected(%State{} = state) do
-    case Daemon.cancel_session(state.selected_session_id, state.opts) do
+    cancel_session(state, state.selected_session_id)
+  end
+
+  defp cancel_target(%State{} = state, value) do
+    target = String.trim(value)
+
+    cond do
+      String.downcase(target) == "selected" ->
+        cancel_selected(state)
+
+      true ->
+        case resolve_session_id(target, state.sessions, state.all_sessions) do
+          nil ->
+            {:continue, %{state | notice: "Session not found: #{target}"}}
+
+          session_id ->
+            cancel_session(state, session_id)
+        end
+    end
+  end
+
+  defp cancel_session(%State{} = state, session_id) do
+    case Daemon.cancel_session(session_id, state.opts) do
       {:ok, _result} ->
-        refresh(state, "Cancelled #{state.selected_session_id}.")
+        refresh(%{state | selected_session_id: session_id}, "Cancelled #{session_id}.")
 
       {:error, reason} ->
         {:continue, %{state | notice: "Cancel failed: #{format_reason(reason)}"}}
@@ -917,7 +942,7 @@ defmodule ClawCode.TUI do
   end
 
   defp help_text do
-    "Commands: chat <prompt>, resume <prompt>, resume <n|id|latest|active|running|completed|failed> <prompt>, open <n|id|latest|active|latest-running|latest-completed|running|completed|failed>, filter <all|running|completed|failed>, find <substring>, clear find, watch <seconds|on|off>, follow <latest|active|running|latest-running|completed|failed|off>, focus <active|all>, find-msg <substring>, clear find-msg, next-hit, prev-hit, limit <n>, next, prev, cancel, provider <name|default>, model <name|default>, base-url <url>, clear base-url, tools auto|on|off, probe, refresh, help, quit"
+    "Commands: chat <prompt>, resume <prompt>, resume <n|id|latest|active|running|completed|failed> <prompt>, open <n|id|latest|active|latest-running|latest-completed|running|completed|failed>, cancel [selected|n|id|latest|active|running|completed|failed], filter <all|running|completed|failed>, find <substring>, clear find, watch <seconds|on|off>, follow <latest|active|running|latest-running|completed|failed|off>, focus <active|all>, find-msg <substring>, clear find-msg, next-hit, prev-hit, limit <n>, next, prev, provider <name|default>, model <name|default>, base-url <url>, clear base-url, tools auto|on|off, probe, refresh, help, quit"
   end
 
   defp step_session(%State{sessions: []} = state, _offset) do

@@ -34,6 +34,7 @@ It stays intentionally small:
 - optional `watch <seconds|on|off>` auto-refresh cadence for active monitoring
 - optional `follow <latest|running|latest-running|completed|failed|off>` auto-selection for active monitoring
 - `active` alias support plus `focus active` / `focus all` monitoring presets
+- targeted `cancel active`, `cancel running`, and `cancel selected` intervention
 - daemon-backed `chat` and `resume`
 - in-client `provider`, `model`, and `base-url` switching, including reset-to-default
 - in-client `probe` for the active provider configuration
