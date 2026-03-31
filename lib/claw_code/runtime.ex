@@ -200,7 +200,7 @@ defmodule ClawCode.Runtime do
       output: output,
       stop_reason: stop_reason,
       turns: turns,
-      provider: Map.from_struct(config),
+      provider: provider_snapshot(config),
       routed_matches: Enum.map(matches, &Map.from_struct/1),
       messages: messages,
       tool_receipts: tool_receipts,
@@ -310,6 +310,15 @@ defmodule ClawCode.Runtime do
       tool_name: name,
       argument_keys: arguments |> Map.keys() |> Enum.sort()
     })
+  end
+
+  defp provider_snapshot(config) do
+    %{
+      provider: config.provider,
+      base_url: config.base_url,
+      model: config.model,
+      api_key_present: is_binary(config.api_key) and config.api_key != ""
+    }
   end
 
   defp session_server_opts(opts) do

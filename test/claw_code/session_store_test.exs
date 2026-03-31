@@ -46,4 +46,16 @@ defmodule ClawCode.SessionStoreTest do
     assert document["updated_at"]
     assert document["turns"] == 0
   end
+
+  test "list returns saved sessions" do
+    root = Path.join(System.tmp_dir!(), "claw-code-session-store-list-test")
+
+    SessionStore.save(%{id: "session-1", prompt: "hello", output: "world", messages: []},
+      root: root
+    )
+
+    sessions = SessionStore.list(root: root, limit: 10)
+
+    assert Enum.any?(sessions, &(&1["id"] == "session-1"))
+  end
 end

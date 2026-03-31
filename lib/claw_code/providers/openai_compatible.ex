@@ -1,5 +1,15 @@
 defmodule ClawCode.Providers.OpenAICompatible do
+  @default_connect_timeout_ms 5_000
+  @default_request_timeout_ms 30_000
+  @providers ~w(generic glm nim kimi)
+
   defstruct [:provider, :base_url, :api_key, :model]
+
+  def providers, do: @providers
+
+  def valid_provider?(provider) when is_binary(provider) do
+    normalize_provider(provider) in @providers
+  end
 
   def resolve_config(opts \\ []) do
     provider =
@@ -19,6 +29,30 @@ defmodule ClawCode.Providers.OpenAICompatible do
 
   def configured?(%__MODULE__{} = config) do
     present?(config.base_url) and present?(config.api_key) and present?(config.model)
+  end
+
+  def diagnostics(opts \\ []) do
+    config = resolve_config(opts)
+    required = required_env_vars(config.provider)
+
+    field_diagnostics = %{
+      base_url:
+        field_diagnostic(config.base_url, required.base_url, default_base_url(config.provider)),
+      api_key: field_diagnostic(config.api_key, required.api_key, nil),
+      model: field_diagnostic(config.model, required.model, default_model(config.provider))
+    }
+
+    %{
+      provider: config.provider,
+      configured: configured?(config),
+      request_url: if(present?(config.base_url), do: request_url(config.base_url), else: nil),
+      fields: field_diagnostics,
+      missing_fields:
+        field_diagnostics
+        |> Enum.flat_map(fn {field, diagnostic} ->
+          if diagnostic.value_present?, do: [], else: [field]
+        end)
+    }
   end
 
   def chat(%__MODULE__{} = config, messages, opts \\ []) do
@@ -48,7 +82,10 @@ defmodule ClawCode.Providers.OpenAICompatible do
     case :httpc.request(
            :post,
            {String.to_charlist(url), headers, ~c"application/json", body},
-           [],
+           [
+             connect_timeout: timeout_env("CLAW_CONNECT_TIMEOUT_MS", @default_connect_timeout_ms),
+             timeout: timeout_env("CLAW_REQUEST_TIMEOUT_MS", @default_request_timeout_ms)
+           ],
            body_format: :binary
          ) do
       {:ok, {{_, status, _}, _headers, response_body}} when status in 200..299 ->
@@ -99,6 +136,11 @@ defmodule ClawCode.Providers.OpenAICompatible do
   def default_base_url("kimi"), do: "https://api.moonshot.ai/v1"
   def default_base_url(_provider), do: nil
 
+  def default_model("glm"), do: "GLM-4.7"
+  def default_model("nim"), do: "meta/llama-3.1-8b-instruct"
+  def default_model("kimi"), do: "kimi-k2.5"
+  def default_model(_provider), do: nil
+
   defp provider_base_url("glm") do
     env("GLM_BASE_URL") || env("BIGMODEL_BASE_URL") || env("CLAW_BASE_URL") ||
       default_base_url("glm")
@@ -135,16 +177,16 @@ defmodule ClawCode.Providers.OpenAICompatible do
   end
 
   defp provider_model("glm") do
-    env("GLM_MODEL") || env("BIGMODEL_MODEL") || env("CLAW_MODEL") || "GLM-4.7"
+    env("GLM_MODEL") || env("BIGMODEL_MODEL") || env("CLAW_MODEL") || default_model("glm")
   end
 
   defp provider_model("nim") do
     env("NIM_MODEL") || env("NVIDIA_MODEL") || env("CLAW_MODEL") ||
-      "meta/llama-3.1-8b-instruct"
+      default_model("nim")
   end
 
   defp provider_model("kimi") do
-    env("KIMI_MODEL") || env("MOONSHOT_MODEL") || env("CLAW_MODEL") || "kimi-k2.5"
+    env("KIMI_MODEL") || env("MOONSHOT_MODEL") || env("CLAW_MODEL") || default_model("kimi")
   end
 
   defp provider_model(_provider) do
@@ -155,7 +197,7 @@ defmodule ClawCode.Providers.OpenAICompatible do
     System.get_env(name)
   end
 
-  defp request_url(base_url) do
+  def request_url(base_url) do
     base_url = String.trim_trailing(base_url, "/")
 
     if String.ends_with?(base_url, "/chat/completions") do
@@ -171,7 +213,38 @@ defmodule ClawCode.Providers.OpenAICompatible do
     |> String.downcase()
   end
 
+  defp field_diagnostic(value, candidates, default_value) do
+    env_source = Enum.find(candidates, &present?(env(&1)))
+
+    source =
+      cond do
+        env_source -> "env:#{env_source}"
+        present?(value) and present?(default_value) and value == default_value -> "default"
+        present?(value) -> "explicit"
+        true -> "missing"
+      end
+
+    %{
+      source: source,
+      candidates: candidates,
+      value_present?: present?(value)
+    }
+  end
+
   defp present?(value), do: is_binary(value) and value != ""
+
+  defp timeout_env(name, default) do
+    case env(name) do
+      nil ->
+        default
+
+      value ->
+        case Integer.parse(value) do
+          {parsed, ""} when parsed > 0 -> parsed
+          _other -> default
+        end
+    end
+  end
 
   defp maybe_put(map, _key, _value, false), do: map
   defp maybe_put(map, key, value, true), do: Map.put(map, key, value)

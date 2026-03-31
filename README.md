@@ -84,14 +84,18 @@ Sessions live under `.claw/sessions/` and can be resumed by explicit id.
 ```bash
 ./claw_code chat --session-id my-session --provider kimi "inspect this repo"
 ./claw_code resume-session my-session --provider kimi "continue from the last state"
+./claw_code sessions --limit 10
 ./claw_code load-session my-session
+./claw_code load-session my-session --show-messages --show-receipts
 ```
 
-`load-session` now exposes `created=` and `updated=` timestamps together with message and receipt counts.
+`load-session` exposes `created=` and `updated=` timestamps together with message and receipt counts. `sessions` gives a fast index of recent session ids, stop reasons, and receipt counts so operator work stays inspectable from the CLI.
 
 ## Provider Setup
 
 Provider contracts are documented in [docs/providers.md](./docs/providers.md). `claw_code` does not need to read secret files; pass provider credentials through environment variables or explicit CLI flags.
+
+`./claw_code doctor` now reports whether the active provider is fully configured, which request URL will be used, and whether each field came from an env var, a default, or is still missing.
 
 ## Release Automation
 

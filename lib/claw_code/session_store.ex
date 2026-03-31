@@ -43,6 +43,26 @@ defmodule ClawCode.SessionStore do
     path |> File.read!() |> Jason.decode!()
   end
 
+  def list(opts \\ []) do
+    root = Keyword.get(opts, :root, root_dir())
+    limit = Keyword.get(opts, :limit, 20)
+
+    root
+    |> Path.join("*.json")
+    |> Path.wildcard()
+    |> Enum.flat_map(fn path ->
+      case File.read(path) do
+        {:ok, contents} -> [Jason.decode!(contents)]
+        {:error, _reason} -> []
+      end
+    end)
+    |> Enum.sort_by(
+      fn session -> {session["updated_at"] || session["saved_at"] || "", session["id"] || ""} end,
+      :desc
+    )
+    |> Enum.take(limit)
+  end
+
   def fetch(session_id, opts \\ []) do
     root = Keyword.get(opts, :root, root_dir())
     path = Path.join(root, "#{session_id}.json")

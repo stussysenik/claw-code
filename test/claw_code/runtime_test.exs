@@ -32,6 +32,9 @@ defmodule ClawCode.RuntimeTest do
 
     assert session["requirements"] == SessionStore.requirements_ledger()
     assert session["tool_receipts"] == []
+    assert session["provider"]["provider"] == "generic"
+    assert session["provider"]["api_key_present"] == false
+    refute Map.has_key?(session["provider"], "api_key")
   end
 
   test "chat persists tool receipts when the provider requests a local tool" do
@@ -103,6 +106,8 @@ defmodule ClawCode.RuntimeTest do
 
     assert length(session["tool_receipts"]) == 1
     assert hd(session["tool_receipts"])["tool_name"] == "shell"
+    assert session["provider"]["api_key_present"] == true
+    refute Map.has_key?(session["provider"], "api_key")
   end
 
   test "chat resumes an existing session when session_id is provided" do

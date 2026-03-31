@@ -35,7 +35,25 @@ provider_cycle() {
     run ./claw_code chat --provider "$PROVIDER" "$PROMPT"
   else
     note "provider credentials not present; validating missing-provider path instead"
-    run ./claw_code chat --provider "$PROVIDER" "$PROMPT"
+    local output
+    local status
+
+    set +e
+    output="$(cd "$ROOT" && ./claw_code chat --provider "$PROVIDER" "$PROMPT" 2>&1)"
+    status=$?
+    set -e
+
+    printf '%s\n' "$output" | tee -a "$LOG_FILE"
+
+    if [[ "$status" -ne 1 ]]; then
+      note "expected missing-provider validation to exit 1, got $status"
+      return 1
+    fi
+
+    if ! grep -q "Stop reason: missing_provider_config" <<<"$output"; then
+      note "expected missing-provider validation to report missing_provider_config"
+      return 1
+    fi
   fi
 }
 

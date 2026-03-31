@@ -13,6 +13,34 @@
 - Configure providers through environment variables or explicit CLI flags.
 - Do not rely on committed secret files.
 - `claw_code` only needs one OpenAI-compatible contract: base URL, API key, and model.
+- `./claw_code doctor` reports the active provider request URL, whether the provider is fully configured, and whether each field is coming from an env var, a default, or is still missing.
+- `./scripts/qa.sh provider` is env-driven; use direct `./claw_code doctor` or `./claw_code chat` commands when you want to pass explicit CLI flags.
+
+## Copy-Paste CLI Checks
+
+Kimi:
+
+```bash
+./claw_code doctor --provider kimi --api-key "$KIMI_API_KEY"
+./claw_code chat --provider kimi --api-key "$KIMI_API_KEY" "say hello and report the configured provider"
+```
+
+Custom OpenAI-compatible endpoint:
+
+```bash
+./claw_code doctor \
+  --provider generic \
+  --base-url "https://example.com/v1" \
+  --api-key "$CLAW_API_KEY" \
+  --model "GLM-4.7"
+
+./claw_code chat \
+  --provider generic \
+  --base-url "https://example.com/v1" \
+  --api-key "$CLAW_API_KEY" \
+  --model "GLM-4.7" \
+  "say hello and report the configured provider"
+```
 
 ## Generic Or Custom OpenAI-Compatible
 

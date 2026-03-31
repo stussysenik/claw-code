@@ -75,6 +75,33 @@ defmodule ClawCode.ProviderTest do
     )
   end
 
+  test "provider diagnostics show defaulted and missing fields without leaking keys" do
+    with_env(
+      %{
+        "KIMI_BASE_URL" => nil,
+        "MOONSHOT_BASE_URL" => nil,
+        "CLAW_BASE_URL" => nil,
+        "KIMI_MODEL" => nil,
+        "MOONSHOT_MODEL" => nil,
+        "CLAW_MODEL" => nil,
+        "KIMI_API_KEY" => nil,
+        "MOONSHOT_API_KEY" => nil,
+        "CLAW_API_KEY" => nil
+      },
+      fn ->
+        diagnostics = OpenAICompatible.diagnostics(provider: "kimi")
+
+        assert diagnostics.provider == "kimi"
+        assert diagnostics.configured == false
+        assert diagnostics.request_url == "https://api.moonshot.ai/v1/chat/completions"
+        assert diagnostics.fields.base_url.source == "default"
+        assert diagnostics.fields.model.source == "default"
+        assert diagnostics.fields.api_key.source == "missing"
+        assert :api_key in diagnostics.missing_fields
+      end
+    )
+  end
+
   defp with_env(overrides, fun) do
     previous =
       Enum.into(overrides, %{}, fn {key, _value} -> {key, System.get_env(key)} end)

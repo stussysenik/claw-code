@@ -40,8 +40,9 @@ defmodule ClawCode.Manifest do
     |> Enum.join("\n")
   end
 
-  def render_doctor do
-    config = OpenAICompatible.resolve_config()
+  def render_doctor(opts \\ []) do
+    config = OpenAICompatible.resolve_config(opts)
+    diagnostics = OpenAICompatible.diagnostics(opts)
     facts = Host.kernel_facts()
 
     [
@@ -56,9 +57,12 @@ defmodule ClawCode.Manifest do
       "- lua: #{runtime_engine(:lua)}",
       "- common_lisp: #{runtime_engine(:common_lisp)}",
       "- provider: #{config.provider}",
-      "- base_url: #{config.base_url || "missing"}",
-      "- api_key: #{mask(config.api_key)}",
-      "- model: #{config.model || "missing"}"
+      "- configured: #{diagnostics.configured}",
+      "- request_url: #{diagnostics.request_url || "missing"}",
+      "- base_url: #{config.base_url || "missing"} (#{diagnostics.fields.base_url.source})",
+      "- api_key: #{mask(config.api_key)} (#{diagnostics.fields.api_key.source})",
+      "- model: #{config.model || "missing"} (#{diagnostics.fields.model.source})",
+      "- missing: #{render_missing_fields(diagnostics.missing_fields)}"
     ]
     |> Enum.join("\n")
   end
@@ -73,6 +77,9 @@ defmodule ClawCode.Manifest do
       _ -> "missing"
     end
   end
+
+  defp render_missing_fields([]), do: "none"
+  defp render_missing_fields(fields), do: Enum.map_join(fields, ", ", &to_string/1)
 
   defp mask(nil), do: "missing"
   defp mask(value) when byte_size(value) <= 6, do: String.duplicate("*", byte_size(value))
