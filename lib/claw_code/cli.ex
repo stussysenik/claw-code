@@ -1,5 +1,15 @@
 defmodule ClawCode.CLI do
-  alias ClawCode.{Manifest, Permissions, Registry, Router, Runtime, SessionStore, Symphony}
+  alias ClawCode.{
+    Daemon,
+    Manifest,
+    Permissions,
+    Registry,
+    Router,
+    Runtime,
+    SessionStore,
+    Symphony
+  }
+
   alias ClawCode.Providers.OpenAICompatible
 
   @switches [
@@ -17,8 +27,13 @@ defmodule ClawCode.CLI do
     allow_write: :boolean,
     show_messages: :boolean,
     show_receipts: :boolean,
+    daemon: :boolean,
     native: :boolean,
-    no_native: :boolean
+    no_native: :boolean,
+    no_daemon: :boolean,
+    session_root: :string,
+    daemon_root: :string,
+    daemon_timeout_ms: :integer
   ]
 
   def main(argv) do
@@ -46,10 +61,13 @@ defmodule ClawCode.CLI do
             1
         end
 
+      ["daemon" | rest] ->
+        run_daemon(rest)
+
       ["sessions" | rest] ->
         with {:ok, opts, _args} <- parse_opts(rest) do
           limit = Keyword.get(opts, :limit, 20)
-          IO.puts(render_sessions(SessionStore.list(limit: limit)))
+          IO.puts(render_sessions(SessionStore.list(limit: limit, root: session_root_opt(opts))))
           0
         else
           {:error, message} ->
@@ -135,23 +153,7 @@ defmodule ClawCode.CLI do
         end
 
       ["cancel-session", session_id | rest] ->
-        with {:ok, opts, _args} <- parse_opts(rest),
-             {:ok, _cancelled} <- normalize_cancel(Runtime.cancel(session_id, opts)) do
-          IO.puts("Cancelled session in this runtime: #{session_id}")
-          0
-        else
-          {:error, :not_found} ->
-            IO.puts("Session not found: #{session_id}")
-            1
-
-          {:error, :not_running} ->
-            IO.puts("Session is not running in this runtime: #{session_id}")
-            1
-
-          {:error, message} when is_binary(message) ->
-            IO.puts(message)
-            1
-        end
+        run_cancel(session_id, rest)
 
       ["symphony" | rest] ->
         {opts, args, _invalid} = OptionParser.parse(rest, strict: @switches)
@@ -221,7 +223,7 @@ defmodule ClawCode.CLI do
 
       ["load-session", session_id | rest] ->
         with {:ok, opts, _args} <- parse_opts(rest),
-             {:ok, session} <- SessionStore.fetch(session_id) do
+             {:ok, session} <- SessionStore.fetch(session_id, root: session_root_opt(opts)) do
           IO.puts(render_session(session, opts))
           0
         else
@@ -383,9 +385,181 @@ defmodule ClawCode.CLI do
   end
 
   defp run_chat(prompt, opts) do
-    result = Runtime.chat(prompt, opts)
-    IO.puts(render_chat_result(result))
-    chat_exit_code(result)
+    if Keyword.get(opts, :daemon, false) do
+      run_daemon_chat(prompt, opts)
+    else
+      result = Runtime.chat(prompt, opts)
+      IO.puts(render_chat_result(result))
+      chat_exit_code(result)
+    end
+  end
+
+  defp run_daemon(["start" | rest]) do
+    with {:ok, opts, _args} <- parse_opts(rest),
+         {:ok, status} <- normalize_daemon_result(Daemon.start_background(opts)) do
+      IO.puts(render_daemon_status(status))
+      0
+    else
+      {:error, message} ->
+        IO.puts(message)
+        1
+    end
+  end
+
+  defp run_daemon(["serve" | rest]) do
+    with {:ok, opts, _args} <- parse_opts(rest),
+         :ok <- normalize_daemon_serve(Daemon.serve(opts)) do
+      0
+    else
+      {:error, message} ->
+        IO.puts(message)
+        1
+    end
+  end
+
+  defp run_daemon(["status" | rest]) do
+    with {:ok, opts, _args} <- parse_opts(rest),
+         {:ok, status} <- normalize_daemon_result(Daemon.status(opts)) do
+      IO.puts(render_daemon_status(status))
+      0
+    else
+      {:error, message} ->
+        IO.puts(message)
+        1
+    end
+  end
+
+  defp run_daemon(["stop" | rest]) do
+    with {:ok, opts, _args} <- parse_opts(rest),
+         {:ok, result} <- normalize_daemon_result(Daemon.stop(opts)) do
+      IO.puts(render_daemon_stop(result))
+      0
+    else
+      {:error, message} ->
+        IO.puts(message)
+        1
+    end
+  end
+
+  defp run_daemon(_rest) do
+    IO.puts("Usage: claw_code daemon <start|serve|status|stop>")
+    1
+  end
+
+  defp run_cancel(session_id, rest) do
+    with {:ok, opts, _args} <- parse_opts(rest) do
+      if Keyword.get(opts, :daemon, false) do
+        run_daemon_cancel(session_id, opts)
+      else
+        run_local_cancel(session_id, opts)
+      end
+    else
+      {:error, message} ->
+        IO.puts(message)
+        1
+    end
+  end
+
+  defp run_local_cancel(session_id, opts) do
+    with {:ok, _cancelled} <- normalize_cancel(Runtime.cancel(session_id, opts)) do
+      IO.puts("Cancelled session in this runtime: #{session_id}")
+      0
+    else
+      {:error, :not_found} ->
+        IO.puts("Session not found: #{session_id}")
+        1
+
+      {:error, :not_running} ->
+        IO.puts("Session is not running in this runtime: #{session_id}")
+        1
+
+      {:error, message} when is_binary(message) ->
+        IO.puts(message)
+        1
+    end
+  end
+
+  defp run_daemon_cancel(session_id, opts) do
+    case Daemon.cancel_session(session_id, opts) do
+      {:ok, _cancelled} ->
+        IO.puts("Cancelled session via daemon: #{session_id}")
+        0
+
+      {:error, :not_found} ->
+        IO.puts("Session not found: #{session_id}")
+        1
+
+      {:error, :session_not_running} ->
+        IO.puts("Session is not running in the daemon: #{session_id}")
+        1
+
+      {:error, :not_running} ->
+        IO.puts("Daemon is not running.")
+        1
+
+      {:error, message} when is_binary(message) ->
+        IO.puts(message)
+        1
+
+      {:error, reason} ->
+        IO.puts("Daemon cancel failed: #{inspect(reason)}")
+        1
+    end
+  end
+
+  defp run_daemon_chat(prompt, opts) do
+    case Daemon.chat(prompt, opts) do
+      {:ok, result} ->
+        IO.puts(render_chat_result(result))
+        chat_exit_code(result)
+
+      {:error, :not_running} ->
+        IO.puts("Daemon is not running. Start it with `./claw_code daemon start`.")
+        1
+
+      {:error, message} when is_binary(message) ->
+        IO.puts(message)
+        1
+
+      {:error, reason} ->
+        IO.puts("Daemon chat failed: #{inspect(reason)}")
+        1
+    end
+  end
+
+  defp render_daemon_status(status) do
+    [
+      "# Daemon",
+      "",
+      "- status: #{status["status"]}",
+      render_status_field("root", status["root"]),
+      render_status_field("session_root", status["session_root"]),
+      render_status_field("host", status["host"]),
+      render_status_field("port", status["port"]),
+      render_status_field("pid", status["pid"]),
+      render_status_field("started_at", status["started_at"]),
+      render_status_field("server_time", status["server_time"]),
+      render_status_field("version", status["version"]),
+      render_status_field("already_running", status["already_running"])
+    ]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join("\n")
+  end
+
+  defp render_daemon_stop(result) do
+    [
+      "# Daemon",
+      "",
+      "- status: #{result["status"] || "stopped"}"
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp render_status_field(_key, nil), do: nil
+  defp render_status_field(key, value), do: "- #{key}: #{value}"
+
+  defp session_root_opt(opts) do
+    Keyword.get(opts, :session_root, SessionStore.root_dir())
   end
 
   defp parse_opts(args, opts \\ []) do
@@ -426,14 +600,42 @@ defmodule ClawCode.CLI do
   defp chat_exit_code(%{stop_reason: "completed"}), do: 0
   defp chat_exit_code(_result), do: 1
 
+  defp normalize_daemon_result({:ok, status}), do: {:ok, status}
+  defp normalize_daemon_result({:error, reason}), do: {:error, daemon_error_message(reason)}
+
+  defp normalize_daemon_serve(:ok), do: :ok
+  defp normalize_daemon_serve({:error, reason}), do: {:error, daemon_error_message(reason)}
+
+  defp daemon_error_message(:not_running), do: "Daemon is not running."
+  defp daemon_error_message(:already_running), do: "Daemon is already running."
+  defp daemon_error_message(:session_not_running), do: "Session is not running in the daemon."
+  defp daemon_error_message(:start_timeout), do: "Daemon did not become ready in time."
+
+  defp daemon_error_message(:missing_executable) do
+    "Daemon start needs a built escript. Run `mix escript.build` first."
+  end
+
+  defp daemon_error_message({:start_failed, status}) do
+    "Daemon start failed with exit status #{status}."
+  end
+
+  defp daemon_error_message(reason) when is_binary(reason), do: reason
+  defp daemon_error_message(reason), do: inspect(reason)
+
   defp normalize_cancel({:ok, {_path, document}}), do: {:ok, document}
   defp normalize_cancel({:error, :not_running}), do: {:error, :not_running}
   defp normalize_cancel({:error, :not_found}), do: {:error, :not_found}
   defp normalize_cancel(other), do: other
 
   defp normalize_opts(opts) do
-    if Keyword.get(opts, :no_native, false) do
-      Keyword.put(opts, :native, false)
+    opts
+    |> normalize_inverse_flag(:native, :no_native)
+    |> normalize_inverse_flag(:daemon, :no_daemon)
+  end
+
+  defp normalize_inverse_flag(opts, key, inverse_key) do
+    if Keyword.get(opts, inverse_key, false) do
+      Keyword.put(opts, key, false)
     else
       opts
     end
@@ -461,21 +663,25 @@ defmodule ClawCode.CLI do
       summary
       manifest
       doctor [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY]
-      sessions [--limit N]
+      daemon serve [--daemon-root PATH] [--session-root PATH]
+      daemon start [--daemon-root PATH] [--session-root PATH]
+      daemon status [--daemon-root PATH]
+      daemon stop [--daemon-root PATH]
+      sessions [--limit N] [--session-root PATH]
       commands [--limit N] [--query TEXT]
       tools [--limit N] [--query TEXT] [--deny-tool NAME] [--deny-prefix PREFIX]
       route <prompt> [--limit N] [--native|--no-native]
       bootstrap <prompt> [--limit N] [--native|--no-native]
-      chat <prompt> [--session-id ID] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--max-turns N] [--allow-shell] [--allow-write] [--native|--no-native]
-      resume-session <session_id> <prompt> [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--max-turns N] [--allow-shell] [--allow-write] [--native|--no-native]
-      cancel-session <session_id> [same runtime only]
+      chat <prompt> [--daemon] [--session-id ID] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--max-turns N] [--allow-shell] [--allow-write] [--native|--no-native] [--session-root PATH] [--daemon-root PATH]
+      resume-session <session_id> <prompt> [--daemon] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--max-turns N] [--allow-shell] [--allow-write] [--native|--no-native] [--session-root PATH] [--daemon-root PATH]
+      cancel-session <session_id> [--daemon] [--session-root PATH] [--daemon-root PATH]
       symphony <prompt> [--limit N] [--native|--no-native]
       turn-loop <prompt> ...
       show-command <name>
       show-tool <name>
       exec-command <name> <prompt>
       exec-tool <name> <payload>
-      load-session <session_id> [--show-messages] [--show-receipts]
+      load-session <session_id> [--session-root PATH] [--show-messages] [--show-receipts]
     """
   end
 end

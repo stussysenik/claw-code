@@ -8,6 +8,7 @@
 - [Canonical Operator Layer](#canonical-operator-layer)
 - [Working Commands](#working-commands)
 - [Session Resume](#session-resume)
+- [Persistent Control Plane](#persistent-control-plane)
 - [Provider Setup](#provider-setup)
 - [Release Automation](#release-automation)
 - [Repository Layout](#repository-layout)
@@ -31,6 +32,7 @@
 - [docs/execution-plan.md](./docs/execution-plan.md)
 - [docs/engineering-standards.md](./docs/engineering-standards.md)
 - [docs/providers.md](./docs/providers.md)
+- [docs/proposals/persistent-control-plane.md](./docs/proposals/persistent-control-plane.md)
 - [progress.md](./progress.md)
 - [scripts/validate-repo.sh](./scripts/validate-repo.sh)
 - [scripts/qa.sh](./scripts/qa.sh)
@@ -38,6 +40,7 @@
 - [scripts/ralph-native.sh](./scripts/ralph-native.sh)
 - [scripts/ralph-adapters.sh](./scripts/ralph-adapters.sh)
 - [scripts/ralph-provider.sh](./scripts/ralph-provider.sh)
+- [scripts/ralph-daemon.sh](./scripts/ralph-daemon.sh)
 - [scripts/ralph-release.sh](./scripts/ralph-release.sh)
 - [package.json](./package.json)
 - [.releaserc.json](./.releaserc.json)
@@ -61,6 +64,7 @@ Canonical QA dispatcher:
 ./scripts/qa.sh native
 ./scripts/qa.sh adapters
 ./scripts/qa.sh provider "say hello and report the configured provider"
+./scripts/qa.sh daemon
 ./scripts/qa.sh release
 ```
 
@@ -86,11 +90,27 @@ Sessions live under `.claw/sessions/` and can be resumed by explicit id.
 ./claw_code resume-session my-session --provider kimi "continue from the last state"
 ./claw_code sessions --limit 10
 ./claw_code cancel-session my-session
+./claw_code cancel-session my-session --daemon
 ./claw_code load-session my-session
 ./claw_code load-session my-session --show-messages --show-receipts
 ```
 
-`load-session` exposes `created=` and `updated=` timestamps together with message and receipt counts. `sessions` gives a fast index of recent session ids, run states, stop reasons, and receipt counts, and `cancel-session` controls a run only when that session lives in the same long-lived BEAM instance. The runtime now only allows one active run per session id inside the same BEAM, and intermediate tool receipts/messages are checkpointed into the saved session before the final provider reply lands.
+`load-session` exposes `created=` and `updated=` timestamps together with message and receipt counts. `sessions` gives a fast index of recent session ids, run states, stop reasons, and receipt counts. The direct runtime path still allows one active run per session id inside the same BEAM and checkpoints tool receipts/messages before the final provider reply lands. If you need cross-process control, use the daemon-backed path explicitly.
+
+## Persistent Control Plane
+
+`claw_code` now has an explicit local daemon path for cross-process session ownership. It stays local-only and narrow: `daemon start`, `daemon status`, `daemon stop`, and daemon-backed `chat`, `resume-session`, and `cancel-session`.
+
+```bash
+./claw_code daemon start
+./claw_code daemon status
+./claw_code chat --daemon --provider kimi "inspect this repo"
+./claw_code resume-session my-session --daemon --provider kimi "continue"
+./claw_code cancel-session my-session --daemon
+./claw_code daemon stop
+```
+
+The design goal is not a network service or a distributed node mesh. It is a boring, inspectable local coordinator that can survive a shell exit, keep session ownership stable, and become the foundation for future multi-client control without loosening the current KISS/DRY/SRP boundaries. Use `--session-root PATH` and `--daemon-root PATH` when you want isolated operator roots for testing or parallel work.
 
 ## Provider Setup
 

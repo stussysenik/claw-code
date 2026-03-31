@@ -2,7 +2,7 @@ defmodule ClawCode.CLITest do
   use ExUnit.Case, async: false
   import ExUnit.CaptureIO
 
-  alias ClawCode.{CLI, Runtime, SessionStore}
+  alias ClawCode.{CLI, Daemon, Runtime, SessionStore}
 
   test "summary command renders app summary" do
     output = capture_io(fn -> assert CLI.run(["summary"]) == 0 end)
@@ -26,6 +26,34 @@ defmodule ClawCode.CLITest do
 
     assert output =~ "- provider: kimi"
     assert output =~ "- api_key: tes**key"
+  end
+
+  test "daemon status reports stopped when no daemon is running" do
+    daemon_root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-daemon-status-#{SessionStore.new_id()}")
+
+    previous_root = Application.get_env(:claw_code, :daemon_root)
+
+    on_exit(fn ->
+      if is_nil(previous_root) do
+        Application.delete_env(:claw_code, :daemon_root)
+      else
+        Application.put_env(:claw_code, :daemon_root, previous_root)
+      end
+
+      File.rm_rf(daemon_root)
+    end)
+
+    Application.put_env(:claw_code, :daemon_root, daemon_root)
+    File.rm_rf(daemon_root)
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["daemon", "status"]) == 0
+      end)
+
+    assert output =~ "# Daemon"
+    assert output =~ "- status: stopped"
   end
 
   test "commands and tools commands render indexes" do
@@ -249,6 +277,185 @@ defmodule ClawCode.CLITest do
     assert output =~ "Cancelled session in this runtime: #{session_id}"
 
     result = Task.await(task, 2_000)
+    assert result.stop_reason == "cancelled"
+  end
+
+  test "chat can use the daemon transport" do
+    session_root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-daemon-chat-#{SessionStore.new_id()}")
+
+    daemon_root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-daemon-meta-#{SessionStore.new_id()}")
+
+    previous_session_root = Application.get_env(:claw_code, :session_root)
+    previous_daemon_root = Application.get_env(:claw_code, :daemon_root)
+
+    on_exit(fn ->
+      if is_nil(previous_session_root) do
+        Application.delete_env(:claw_code, :session_root)
+      else
+        Application.put_env(:claw_code, :session_root, previous_session_root)
+      end
+
+      if is_nil(previous_daemon_root) do
+        Application.delete_env(:claw_code, :daemon_root)
+      else
+        Application.put_env(:claw_code, :daemon_root, previous_daemon_root)
+      end
+
+      case Daemon.stop(daemon_root: daemon_root) do
+        {:ok, _result} -> :ok
+        _other -> :ok
+      end
+
+      File.rm_rf(session_root)
+      File.rm_rf(daemon_root)
+    end)
+
+    Application.put_env(:claw_code, :session_root, session_root)
+    Application.put_env(:claw_code, :daemon_root, daemon_root)
+    File.rm_rf(session_root)
+    File.rm_rf(daemon_root)
+
+    {base_url, listener, server} =
+      start_stub_server([
+        Jason.encode!(%{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "daemon reply"}}]
+        })
+      ])
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    {:ok, daemon_task} =
+      Task.start_link(fn ->
+        Daemon.serve(daemon_root: daemon_root)
+      end)
+
+    on_exit(fn ->
+      if Process.alive?(daemon_task), do: Process.exit(daemon_task, :kill)
+    end)
+
+    assert wait_until(fn ->
+             match?({:ok, %{"status" => "running"}}, Daemon.status(daemon_root: daemon_root))
+           end)
+
+    output =
+      capture_io(fn ->
+        assert CLI.run([
+                 "chat",
+                 "--daemon",
+                 "--provider",
+                 "generic",
+                 "--base-url",
+                 base_url,
+                 "--api-key",
+                 "test-key",
+                 "--model",
+                 "test-model",
+                 "hello"
+               ]) == 0
+      end)
+
+    assert output =~ "# Chat Result"
+    assert output =~ "Stop reason: completed"
+    assert output =~ "daemon reply"
+  end
+
+  test "cancel-session can use the daemon transport" do
+    session_root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-daemon-cancel-#{SessionStore.new_id()}")
+
+    daemon_root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-daemon-cancel-meta-#{SessionStore.new_id()}")
+
+    previous_session_root = Application.get_env(:claw_code, :session_root)
+    previous_daemon_root = Application.get_env(:claw_code, :daemon_root)
+
+    on_exit(fn ->
+      if is_nil(previous_session_root) do
+        Application.delete_env(:claw_code, :session_root)
+      else
+        Application.put_env(:claw_code, :session_root, previous_session_root)
+      end
+
+      if is_nil(previous_daemon_root) do
+        Application.delete_env(:claw_code, :daemon_root)
+      else
+        Application.put_env(:claw_code, :daemon_root, previous_daemon_root)
+      end
+
+      case Daemon.stop(daemon_root: daemon_root) do
+        {:ok, _result} -> :ok
+        _other -> :ok
+      end
+
+      File.rm_rf(session_root)
+      File.rm_rf(daemon_root)
+    end)
+
+    Application.put_env(:claw_code, :session_root, session_root)
+    Application.put_env(:claw_code, :daemon_root, daemon_root)
+    File.rm_rf(session_root)
+    File.rm_rf(daemon_root)
+
+    {base_url, listener, server} =
+      start_stub_server([
+        {Jason.encode!(%{
+           "choices" => [%{"message" => %{"role" => "assistant", "content" => "late reply"}}]
+         }), 500}
+      ])
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    {:ok, daemon_task} =
+      Task.start_link(fn ->
+        Daemon.serve(daemon_root: daemon_root)
+      end)
+
+    on_exit(fn ->
+      if Process.alive?(daemon_task), do: Process.exit(daemon_task, :kill)
+    end)
+
+    assert wait_until(fn ->
+             match?({:ok, %{"status" => "running"}}, Daemon.status(daemon_root: daemon_root))
+           end)
+
+    session_id = "cli-daemon-cancel"
+
+    task =
+      Task.async(fn ->
+        Daemon.chat("hello",
+          provider: "generic",
+          base_url: base_url,
+          api_key: "test-key",
+          model: "test-model",
+          session_id: session_id,
+          session_root: session_root,
+          daemon_root: daemon_root,
+          native: false
+        )
+      end)
+
+    assert wait_until(fn ->
+             case SessionStore.fetch(session_id, root: session_root) do
+               {:ok, session} -> get_in(session, ["run_state", "status"]) == "running"
+               :error -> false
+             end
+           end)
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["cancel-session", session_id, "--daemon"]) == 0
+      end)
+
+    assert output =~ "Cancelled session via daemon: #{session_id}"
+    assert {:ok, result} = Task.await(task, 2_000)
     assert result.stop_reason == "cancelled"
   end
 

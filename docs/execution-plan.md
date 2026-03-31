@@ -5,6 +5,7 @@
 - [Objective](#objective)
 - [Team Topology](#team-topology)
 - [Phase Plan](#phase-plan)
+- [Daemon Proposal](#daemon-proposal)
 - [Git And Release Discipline](#git-and-release-discipline)
 - [Evidence Required Per Slice](#evidence-required-per-slice)
 
@@ -38,6 +39,12 @@ Turn `claw_code` into a learning repo and a durable coding runtime: small codeba
 - Primary issues: `#9`, `#10`
 - Exit signal: research outcomes become docs or scoped tickets, not runtime sprawl
 
+### 5. Persistent Control Plane
+
+- Scope: local daemon lifecycle, cross-process session control, background runs, multi-client coordination
+- Primary issues: `#13` plus the runtime/core lane for shared session semantics
+- Exit signal: `claw_code` can be started once and controlled from separate CLI invocations without losing session continuity or forcing a web server model
+
 ## Phase Plan
 
 ### Phase 0: Repo Operating System
@@ -70,6 +77,20 @@ Turn `claw_code` into a learning repo and a durable coding runtime: small codeba
 - Keep CLI sharp and inspectable.
 - Delay heavyweight TUI work until runtime and provider surfaces are stable.
 - Treat OMX as the development workflow layer, not the shipped product dependency.
+
+### Phase 5: Persistent Control Plane
+
+- Add a local Elixir daemon that owns background session runs and exposes explicit `start`, `status`, `stop`, `chat`, `resume`, and `cancel` operations.
+- Keep transport local-only and boring: no distributed Erlang, no HTTP API, no remote exposure by default.
+- Persist daemon metadata and session ownership state under `.claw/` so client invocations can reconnect, inspect, and cancel work across processes.
+- Introduce a clear client/server split: the CLI can act as a direct runtime client or as a daemon client, but the daemon remains a separate operator surface.
+- Add resilient startup, stale-daemon detection, and crash recovery so a dead control plane fails closed instead of silently losing session state.
+- Make future multi-client control an extension of the same daemon contract, not a separate subsystem.
+- Initial slice status: local daemon lifecycle plus daemon-backed `chat` and `cancel-session` are implemented behind tests; next work is hardening the background path and widening replay/inspection semantics.
+
+## Daemon Proposal
+
+The working proposal is documented in [docs/proposals/persistent-control-plane.md](./proposals/persistent-control-plane.md). It should be treated as the canonical design note for the daemon slice, while this file keeps the repo-level phase ordering.
 
 ## Git And Release Discipline
 

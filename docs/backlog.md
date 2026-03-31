@@ -61,6 +61,13 @@ See also:
 - Title: Eliminate known coding-assistant failure modes
 - Outcome: Avoid plan drift, retain key requirements across long runs, and keep the terminal UX simpler than the current generation of brittle coding TUIs.
 
+### 7. Persistent Control Plane
+
+- Title: Add a local daemon for cross-process session control
+- Outcome: Run `claw_code` behind a small Elixir control plane that can manage background sessions, status checks, cancellation, and future multi-client coordination without turning the runtime into a network service.
+- Proposal: [docs/proposals/persistent-control-plane.md](./proposals/persistent-control-plane.md)
+- Current state: initial daemon lifecycle and daemon-backed session control are implemented; remaining work is hardening and operator evidence.
+
 ## Issue Map
 
 1. `#6` Build durable OTP session orchestration for `claw_code`
@@ -71,9 +78,11 @@ See also:
 6. `#8` Expand runtime adapters across Python, Lua, and Common Lisp
 7. `#9` Research provider/plugin boundaries and WebGPU offload strategy
 8. `#10` Evaluate oh-my-codex as a development workflow layer, not a product dependency
+9. `#13` Add a persistent control-plane daemon for cross-process session control
 
 ## Operator Notes
 
 - Use GitHub issues as the tracking source until a Linear connector is available.
 - Update `progress.md` with every meaningful workflow milestone.
 - Keep the mission set to the four canonical `.omx/missions/*.md` files and retire duplicate variants.
+- Keep the daemon slice grounded in release-gated evidence: lifecycle tests, CLI smoke, and stale-daemon recovery.
