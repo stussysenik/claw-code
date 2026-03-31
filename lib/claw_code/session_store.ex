@@ -24,6 +24,7 @@ defmodule ClawCode.SessionStore do
         :saved_at,
         DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
       )
+      |> Map.put_new(:tool_receipts, [])
       |> Map.put(:requirements, requirements_ledger())
 
     File.write!(path, Jason.encode_to_iodata!(document, pretty: true))

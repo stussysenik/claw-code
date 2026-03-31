@@ -13,6 +13,7 @@ defmodule ClawCode.Runtime do
       :turns,
       :provider,
       :requirements,
+      tool_receipts: [],
       routed_matches: [],
       matched_commands: [],
       matched_tools: [],
@@ -49,11 +50,29 @@ defmodule ClawCode.Runtime do
       messages = seed_messages(prompt, matches)
 
       case loop(messages, config, tool_specs, opts, 1, Keyword.get(opts, :max_turns, 6)) do
-        {:ok, final_messages, output, stop_reason, turns} ->
-          persist_result(prompt, output, stop_reason, turns, config, matches, final_messages)
+        {:ok, final_messages, output, stop_reason, turns, receipts} ->
+          persist_result(
+            prompt,
+            output,
+            stop_reason,
+            turns,
+            config,
+            matches,
+            final_messages,
+            receipts
+          )
 
-        {:error, message} ->
-          persist_result(prompt, message, "provider_error", 0, config, matches, messages)
+        {:error, message, final_messages, receipts} ->
+          persist_result(
+            prompt,
+            message,
+            "provider_error",
+            0,
+            config,
+            matches,
+            final_messages,
+            receipts
+          )
       end
     else
       persist_result(
@@ -63,29 +82,34 @@ defmodule ClawCode.Runtime do
         0,
         config,
         matches,
-        seed_messages(prompt, matches)
+        seed_messages(prompt, matches),
+        []
       )
     end
   end
 
-  defp loop(messages, _config, _tools, _opts, turn, max_turns) when turn > max_turns do
-    {:ok, messages, "Tool loop limit reached.", "max_turns_reached", max_turns}
+  defp loop(messages, _config, _tools, _opts, turn, max_turns, receipts \\ [])
+
+  defp loop(messages, _config, _tools, _opts, turn, max_turns, receipts) when turn > max_turns do
+    {:ok, messages, "Tool loop limit reached.", "max_turns_reached", max_turns, receipts}
   end
 
-  defp loop(messages, config, tools, opts, turn, max_turns) do
+  defp loop(messages, config, tools, opts, turn, max_turns, receipts) do
     case OpenAICompatible.chat(config, messages, tools: tools) do
       {:ok, %{"choices" => [%{"message" => message} | _]}} ->
         assistant_message = normalize_assistant_message(message)
 
         case tool_calls_from(message) do
           [] ->
-            {:ok, messages ++ [assistant_message], content_from(message), "completed", turn}
+            {:ok, messages ++ [assistant_message], content_from(message), "completed", turn,
+             receipts}
 
           tool_calls ->
-            tool_messages =
+            {tool_messages, new_receipts} =
               Enum.map(tool_calls, fn tool_call ->
                 execute_tool_call(tool_call, opts)
               end)
+              |> Enum.unzip()
 
             loop(
               messages ++ [assistant_message] ++ tool_messages,
@@ -93,15 +117,16 @@ defmodule ClawCode.Runtime do
               tools,
               opts,
               turn + 1,
-              max_turns
+              max_turns,
+              receipts ++ new_receipts
             )
         end
 
       {:ok, _unexpected} ->
-        {:error, "provider returned no choices"}
+        {:error, "provider returned no choices", messages, receipts}
 
       {:error, reason} ->
-        {:error, reason}
+        {:error, reason, messages, receipts}
     end
   end
 
@@ -115,21 +140,36 @@ defmodule ClawCode.Runtime do
         {:error, _reason} -> %{"raw" => arguments}
       end
 
-    content =
-      case Builtin.execute(name, parsed_arguments, opts) do
-        {:ok, output} -> output
-        {:error, message} -> "error: #{message}"
+    {content, receipt} =
+      case Builtin.execute_with_receipt(name, parsed_arguments, opts) do
+        {:ok, output, receipt} ->
+          {output, normalize_tool_receipt(receipt, id, name, parsed_arguments)}
+
+        {:error, message, receipt} ->
+          {"error: #{message}", normalize_tool_receipt(receipt, id, name, parsed_arguments)}
       end
 
-    %{
-      "role" => "tool",
-      "tool_call_id" => id,
-      "name" => name,
-      "content" => content
+    {
+      %{
+        "role" => "tool",
+        "tool_call_id" => id,
+        "name" => name,
+        "content" => content
+      },
+      receipt
     }
   end
 
-  defp persist_result(prompt, output, stop_reason, turns, config, matches, messages) do
+  defp persist_result(
+         prompt,
+         output,
+         stop_reason,
+         turns,
+         config,
+         matches,
+         messages,
+         tool_receipts
+       ) do
     requirements = SessionStore.requirements_ledger()
 
     payload = %{
@@ -140,6 +180,7 @@ defmodule ClawCode.Runtime do
       provider: Map.from_struct(config),
       routed_matches: Enum.map(matches, &Map.from_struct/1),
       messages: messages,
+      tool_receipts: tool_receipts,
       requirements: requirements
     }
 
@@ -153,6 +194,7 @@ defmodule ClawCode.Runtime do
       turns: turns,
       provider: config.provider,
       requirements: requirements,
+      tool_receipts: tool_receipts,
       routed_matches: matches,
       matched_commands: Enum.filter(matches, &(&1.kind == :command)),
       matched_tools: Enum.filter(matches, &(&1.kind == :tool)),
@@ -224,7 +266,20 @@ defmodule ClawCode.Runtime do
   defp content_from(_message), do: ""
 
   defp missing_provider_message(config) do
-    "Missing provider configuration for #{config.provider}. Set API key and base URL env vars before running `chat`."
+    envs = OpenAICompatible.required_env_vars(config.provider)
+
+    "Missing provider configuration for #{config.provider}. " <>
+      "Set base_url from #{Enum.join(envs.base_url, "/")}, " <>
+      "api_key from #{Enum.join(envs.api_key, "/")}, " <>
+      "and model from #{Enum.join(envs.model, "/")}."
+  end
+
+  defp normalize_tool_receipt(receipt, id, name, arguments) do
+    Map.merge(receipt, %{
+      tool_call_id: id,
+      tool_name: name,
+      argument_keys: arguments |> Map.keys() |> Enum.sort()
+    })
   end
 
   defp maybe_put(map, _key, _value, false), do: map

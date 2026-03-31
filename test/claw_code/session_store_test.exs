@@ -11,6 +11,7 @@ defmodule ClawCode.SessionStoreTest do
     assert session["prompt"] == "hello"
     assert session["output"] == "world"
     assert session["requirements"] == SessionStore.requirements_ledger()
+    assert session["tool_receipts"] == []
   end
 
   test "overwrites ad hoc requirements with the canonical ledger" do

@@ -88,5 +88,6 @@ defmodule ClawCodeTest do
       end)
 
     assert output =~ "requirements=#{length(SessionStore.requirements_ledger())}"
+    assert output =~ "tool_receipts=0"
   end
 end

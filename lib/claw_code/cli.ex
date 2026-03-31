@@ -166,9 +166,11 @@ defmodule ClawCode.CLI do
       ["load-session", session_id | _rest] ->
         session = SessionStore.load(session_id)
         requirements = session["requirements"] || []
+        tool_receipts = session["tool_receipts"] || []
+        messages = session["messages"] || []
 
         IO.puts(
-          "#{session["id"]}\n#{length(session["messages"])} messages\nrequirements=#{length(requirements)}\nstop=#{session["stop_reason"]}"
+          "#{session["id"]}\n#{length(messages)} messages\nrequirements=#{length(requirements)}\ntool_receipts=#{length(tool_receipts)}\nstop=#{session["stop_reason"]}"
         )
 
         0
@@ -196,6 +198,7 @@ defmodule ClawCode.CLI do
       "Turns: #{result.turns}",
       "Stop reason: #{result.stop_reason}",
       "Session path: #{result.session_path}",
+      "Tool receipts: #{length(result.tool_receipts)}",
       "",
       result.output
     ]

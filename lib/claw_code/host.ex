@@ -24,15 +24,22 @@ defmodule ClawCode.Host do
     Enum.find(runtime_matrix(), &(&1.id == id))
   end
 
-  def run_runtime(:python, code) do
+  def run_runtime(runtime_id, code) do
+    case run_runtime_with_receipt(runtime_id, code) do
+      {:ok, output, _receipt} -> {:ok, output}
+      {:error, output, _receipt} -> {:error, output}
+    end
+  end
+
+  def run_runtime_with_receipt(:python, code) do
     invoke(runtime(:python), ["-c", code])
   end
 
-  def run_runtime(:lua, code) do
+  def run_runtime_with_receipt(:lua, code) do
     invoke(runtime(:lua), ["-e", code])
   end
 
-  def run_runtime(:common_lisp, code) do
+  def run_runtime_with_receipt(:common_lisp, code) do
     case runtime(:common_lisp) do
       %{available: true, engine: "sbcl"} = runtime ->
         invoke(runtime, ["--non-interactive", "--eval", code])
@@ -41,12 +48,13 @@ defmodule ClawCode.Host do
         invoke(runtime, ["-q", "-x", code])
 
       _ ->
-        {:error, "Common Lisp runtime is unavailable"}
+        {:error, "Common Lisp runtime is unavailable", unavailable_receipt(:common_lisp)}
     end
   end
 
-  def run_runtime(:zig, _code) do
-    {:error, "Zig runtime execution is not supported through the host adapter"}
+  def run_runtime_with_receipt(:zig, _code) do
+    {:error, "Zig runtime execution is not supported through the host adapter",
+     unavailable_receipt(:zig)}
   end
 
   defp detect(id, label, binaries) do
@@ -60,19 +68,33 @@ defmodule ClawCode.Host do
     end
   end
 
-  defp invoke(%{available: true, engine: engine}, args) do
-    case External.run(engine, args) do
-      {:ok, output} -> {:ok, output}
-      {:error, %{output: output}} -> {:error, output}
+  defp invoke(%{available: true, binary: binary}, args) do
+    case External.run_with_receipt(binary, args) do
+      {:ok, output, receipt} -> {:ok, output, receipt}
+      {:error, receipt} -> {:error, receipt.output, receipt}
     end
   end
 
-  defp invoke(_runtime, _args), do: {:error, "runtime unavailable"}
+  defp invoke(%{id: runtime_id}, _args),
+    do: {:error, "runtime unavailable", unavailable_receipt(runtime_id)}
 
   defp read_uname do
     case External.run("uname", ["-srm"]) do
       {:ok, output} -> output
       _ -> "unknown"
     end
+  end
+
+  defp unavailable_receipt(runtime_id) do
+    %{
+      command: Atom.to_string(runtime_id),
+      cwd: File.cwd!(),
+      env_keys: [],
+      started_at: nil,
+      duration_ms: 0,
+      status: "unavailable",
+      exit_status: "unavailable",
+      output: "runtime unavailable"
+    }
   end
 end

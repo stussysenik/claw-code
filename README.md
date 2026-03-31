@@ -7,6 +7,7 @@
 - [What Lives Here](#what-lives-here)
 - [Canonical Operator Layer](#canonical-operator-layer)
 - [Working Commands](#working-commands)
+- [Provider Setup](#provider-setup)
 - [Release Automation](#release-automation)
 - [Repository Layout](#repository-layout)
 - [Progress Ledger](#progress-ledger)
@@ -28,6 +29,7 @@
 - [docs/backlog.md](./docs/backlog.md)
 - [docs/execution-plan.md](./docs/execution-plan.md)
 - [docs/engineering-standards.md](./docs/engineering-standards.md)
+- [docs/providers.md](./docs/providers.md)
 - [progress.md](./progress.md)
 - [scripts/validate-repo.sh](./scripts/validate-repo.sh)
 - [scripts/qa.sh](./scripts/qa.sh)
@@ -74,6 +76,10 @@ mix escript.build
 ./claw_code chat --allow-shell --allow-write "inspect the repo and propose a minimal plan"
 ```
 
+## Provider Setup
+
+Provider contracts are documented in [docs/providers.md](./docs/providers.md). `claw_code` does not need to read secret files; pass provider credentials through environment variables or explicit CLI flags.
+
 ## Release Automation
 
 Release automation is driven by semantic-release from conventional commits on `main`.
@@ -92,6 +98,7 @@ The release lane generates tags, updates `CHANGELOG.md`, and publishes GitHub Re
 - `lib/` contains the OTP application, CLI, session store, routing, and symphony-style orchestration.
 - `native/` contains the isolated Zig helper boundary.
 - `docs/` contains backlog and execution-plan material.
+- `docs/providers.md` records the provider env contract for `generic`, `glm`, and `nim`.
 - `.omx/` contains the operator board, team split, checklists, and mission briefs.
 - `scripts/` contains the canonical Ralph loops, QA dispatcher, and validation gate.
 - `progress.md` is the append-only UTC ledger for workflow progress.
