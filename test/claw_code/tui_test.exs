@@ -48,6 +48,7 @@ defmodule ClawCode.TUITest do
     assert output =~ "provider=generic"
     assert output =~ "selected=1/1"
     assert output =~ "filter=all limit=8 query=-"
+    assert output =~ "transcript_query=- hit=-"
     assert output =~ "session-a"
     assert output =~ "assistant: world"
   end
@@ -385,5 +386,85 @@ defmodule ClawCode.TUITest do
     {:continue, cleared_state} = TUI.apply_command(found_state, "clear find")
     assert cleared_state.session_query == nil
     assert length(cleared_state.sessions) == 2
+  end
+
+  test "find-msg and clear find-msg update transcript search state" do
+    session = %{
+      "id" => "session-a",
+      "messages" => [
+        %{"role" => "user", "content" => "inspect alpha"},
+        %{"role" => "assistant", "content" => "beta response"},
+        %{"role" => "user", "content" => "beta follow-up"}
+      ],
+      "tool_receipts" => []
+    }
+
+    state = %State{
+      opts: [],
+      daemon_status: %{"status" => "running"},
+      doctor: %{provider: "generic", model: %{value: "test-model"}, tool_policy: :auto},
+      all_sessions: [session],
+      sessions: [session],
+      session_filter: :all,
+      session_limit: 8,
+      session_root: System.tmp_dir!(),
+      transcript_query: nil,
+      transcript_match_index: 0,
+      selected_session_id: "session-a",
+      selected_session: session
+    }
+
+    {:continue, found_state} = TUI.apply_command(state, "find-msg beta")
+    assert found_state.transcript_query == "beta"
+    assert found_state.transcript_match_index == 0
+    assert found_state.notice =~ "Hit 1/2"
+
+    output = TUI.render(found_state)
+    assert output =~ "transcript_query=beta hit=1/2"
+    assert output =~ "match 1/2 for \"beta\""
+
+    {:continue, cleared_state} = TUI.apply_command(found_state, "clear find-msg")
+    assert cleared_state.transcript_query == nil
+    assert cleared_state.transcript_match_index == 0
+  end
+
+  test "next-hit and prev-hit navigate transcript matches" do
+    session = %{
+      "id" => "session-a",
+      "messages" => [
+        %{"role" => "user", "content" => "alpha"},
+        %{"role" => "assistant", "content" => "beta one"},
+        %{"role" => "user", "content" => "gamma"},
+        %{"role" => "assistant", "content" => "beta two"}
+      ],
+      "tool_receipts" => []
+    }
+
+    state = %State{
+      opts: [],
+      daemon_status: %{"status" => "running"},
+      doctor: %{provider: "generic", model: %{value: "test-model"}, tool_policy: :auto},
+      all_sessions: [session],
+      sessions: [session],
+      session_filter: :all,
+      session_limit: 8,
+      session_root: System.tmp_dir!(),
+      transcript_query: "beta",
+      transcript_match_index: 0,
+      selected_session_id: "session-a",
+      selected_session: session
+    }
+
+    {:continue, next_state} = TUI.apply_command(state, "next-hit")
+    assert next_state.transcript_match_index == 1
+    assert next_state.notice =~ "2/2"
+
+    {:continue, bounded_state} = TUI.apply_command(next_state, "next-hit")
+    assert bounded_state.transcript_match_index == 1
+    assert bounded_state.notice =~ "last transcript hit"
+
+    {:continue, prev_state} = TUI.apply_command(next_state, "prev-hit")
+    assert prev_state.transcript_match_index == 0
+    assert prev_state.notice =~ "1/2"
   end
 end

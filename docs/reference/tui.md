@@ -35,6 +35,7 @@ It stays intentionally small:
 - in-client `probe` for the active provider configuration
 - `next` and `prev` session navigation
 - session filtering, substring `find`, and list limits inside the client
+- transcript `find-msg`, `clear find-msg`, `next-hit`, and `prev-hit` inside the selected session
 - `open latest`, `open latest-completed`, `open running`, `open completed`, and `open failed`
 - targeted `resume latest ...` and `resume completed ...`
 - explicit `tools auto|on|off`

@@ -13,6 +13,8 @@ defmodule ClawCode.TUI do
               session_query: nil,
               session_limit: 8,
               session_root: nil,
+              transcript_query: nil,
+              transcript_match_index: 0,
               selected_session_id: nil,
               selected_session: nil,
               notice: nil
@@ -36,6 +38,9 @@ defmodule ClawCode.TUI do
     session_query =
       normalize_session_query(Map.get(ui, :session_query, Keyword.get(opts, :query)))
 
+    transcript_query = normalize_transcript_query(Map.get(ui, :transcript_query))
+    transcript_match_index = Map.get(ui, :transcript_match_index, 0)
+
     all_sessions = SessionStore.list(limit: session_limit, root: session_root)
     sessions = all_sessions |> filter_sessions(session_filter) |> search_sessions(session_query)
     selected_session_id = default_selected_session_id(sessions)
@@ -51,10 +56,13 @@ defmodule ClawCode.TUI do
       session_query: session_query,
       session_limit: session_limit,
       session_root: session_root,
+      transcript_query: transcript_query,
+      transcript_match_index: transcript_match_index,
       selected_session_id: selected_session_id,
       selected_session: selected_session,
       notice: notice
     }
+    |> normalize_transcript_state()
   end
 
   def apply_command(%State{} = state, input) when is_binary(input) do
@@ -94,6 +102,18 @@ defmodule ClawCode.TUI do
 
       <<"find ", query::binary>> ->
         set_session_query(state, query)
+
+      "clear find-msg" ->
+        clear_transcript_query(state)
+
+      <<"find-msg ", query::binary>> ->
+        set_transcript_query(state, query)
+
+      "next-hit" ->
+        step_transcript_match(state, 1)
+
+      "prev-hit" ->
+        step_transcript_match(state, -1)
 
       <<"limit ", limit::binary>> ->
         set_session_limit(state, limit)
@@ -140,6 +160,7 @@ defmodule ClawCode.TUI do
       "daemon=#{state.daemon_status["status"] || "unknown"} provider=#{state.doctor[:provider] || "unknown"} model=#{nested_value(state.doctor, [:model, :value]) || "missing"} tools=#{state.doctor[:tool_policy] || :auto}",
       "base_url=#{nested_value(state.doctor, [:base_url, :value]) || "missing"} selected=#{selected_session_position(state)}",
       "sessions=#{length(state.sessions)}/#{length(state.all_sessions)} filter=#{state.session_filter} limit=#{state.session_limit} query=#{state.session_query || "-"}",
+      "transcript_query=#{state.transcript_query || "-"} hit=#{selected_transcript_hit_position(state)}",
       "session_root=#{state.session_root}",
       if(state.notice, do: "notice=#{state.notice}"),
       "",
@@ -147,10 +168,10 @@ defmodule ClawCode.TUI do
       render_sessions(state.sessions, state.selected_session_id),
       "",
       "## Selected",
-      render_selected_session(state.selected_session),
+      render_selected_session(state),
       "",
       "## Commands",
-      "chat <prompt> | resume <prompt> | resume <n|id|latest|running|completed|failed> <prompt> | open <n|id|latest|latest-running|latest-completed|running|completed|failed> | filter <all|running|completed|failed> | find <substring> | clear find | limit <n> | next | prev | cancel | provider <name|default> | model <name|default> | base-url <url> | clear base-url | tools auto|on|off | probe | refresh | help | quit"
+      "chat <prompt> | resume <prompt> | resume <n|id|latest|running|completed|failed> <prompt> | open <n|id|latest|latest-running|latest-completed|running|completed|failed> | filter <all|running|completed|failed> | find <substring> | clear find | find-msg <substring> | clear find-msg | next-hit | prev-hit | limit <n> | next | prev | cancel | provider <name|default> | model <name|default> | base-url <url> | clear base-url | tools auto|on|off | probe | refresh | help | quit"
     ]
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join("\n")
@@ -197,6 +218,7 @@ defmodule ClawCode.TUI do
       state.opts
       |> build_state(refresh_daemon_status(state), notice, ui_state(state))
       |> preserve_selection(state.selected_session_id)
+      |> normalize_transcript_state()
 
     {:continue, next_state}
   end
@@ -240,12 +262,12 @@ defmodule ClawCode.TUI do
         selected_session = fetch_session(session_id, state.session_root)
 
         {:continue,
-         %{
+         normalize_transcript_state(%{
            state
            | selected_session_id: session_id,
              selected_session: selected_session,
              notice: "Opened session #{session_id}."
-         }}
+         })}
     end
   end
 
@@ -487,11 +509,72 @@ defmodule ClawCode.TUI do
     {:continue, next_state}
   end
 
+  defp set_transcript_query(%State{} = state, value) do
+    transcript_query = normalize_transcript_query(value)
+
+    if is_nil(transcript_query) do
+      {:continue, %{state | notice: "Transcript search text is required."}}
+    else
+      next_state =
+        state
+        |> Map.put(:transcript_query, transcript_query)
+        |> Map.put(:transcript_match_index, 0)
+        |> normalize_transcript_state()
+
+      {:continue, %{next_state | notice: transcript_notice(transcript_query, next_state)}}
+    end
+  end
+
+  defp clear_transcript_query(%State{} = state) do
+    {:continue,
+     %{
+       state
+       | transcript_query: nil,
+         transcript_match_index: 0,
+         notice: "Transcript find cleared."
+     }}
+  end
+
+  defp step_transcript_match(%State{} = state, offset) do
+    cond do
+      is_nil(state.transcript_query) ->
+        {:continue, %{state | notice: "Transcript search is not active."}}
+
+      true ->
+        match_count = transcript_match_count(state.selected_session, state.transcript_query)
+
+        cond do
+          match_count == 0 ->
+            {:continue, %{state | notice: "No transcript matches for #{state.transcript_query}."}}
+
+          true ->
+            next_index = state.transcript_match_index + offset
+
+            cond do
+              next_index < 0 ->
+                {:continue, %{state | notice: "Already at the first transcript hit."}}
+
+              next_index >= match_count ->
+                {:continue, %{state | notice: "Already at the last transcript hit."}}
+
+              true ->
+                next_state =
+                  %{state | transcript_match_index: next_index}
+                  |> normalize_transcript_state()
+
+                {:continue,
+                 %{next_state | notice: "Transcript hit #{next_index + 1}/#{match_count}."}}
+            end
+        end
+    end
+  end
+
   defp rebuild_with_opts(%State{} = state, opts, notice) do
     next_state =
       opts
       |> build_state(refresh_daemon_status(%{state | opts: opts}), notice, ui_state(state))
       |> preserve_selection(state.selected_session_id)
+      |> normalize_transcript_state()
 
     {:continue, next_state}
   end
@@ -500,7 +583,9 @@ defmodule ClawCode.TUI do
     %{
       session_filter: state.session_filter || :all,
       session_query: state.session_query,
-      session_limit: state.session_limit || 8
+      session_limit: state.session_limit || 8,
+      transcript_query: state.transcript_query,
+      transcript_match_index: state.transcript_match_index || 0
     }
   end
 
@@ -607,23 +692,29 @@ defmodule ClawCode.TUI do
     end)
   end
 
-  defp render_selected_session(nil), do: "none"
+  defp render_selected_session(%State{selected_session: nil}), do: "none"
 
-  defp render_selected_session(session) do
+  defp render_selected_session(%State{} = state) do
+    session = state.selected_session
+
     [
       "id=#{session["id"]}",
       "stop=#{session["stop_reason"] || "unknown"} run=#{get_in(session, ["run_state", "status"]) || "unknown"} turns=#{session["turns"] || 0}",
       "messages:",
-      render_messages(session["messages"] || []),
+      render_messages(
+        session["messages"] || [],
+        state.transcript_query,
+        state.transcript_match_index
+      ),
       "receipts:",
       render_receipts(session["tool_receipts"] || [])
     ]
     |> Enum.join("\n")
   end
 
-  defp render_messages([]), do: "  none"
+  defp render_messages([], _query, _match_index), do: "  none"
 
-  defp render_messages(messages) do
+  defp render_messages(messages, nil, _match_index) do
     messages
     |> Enum.take(-6)
     |> Enum.with_index(1)
@@ -632,6 +723,36 @@ defmodule ClawCode.TUI do
       content = summarize(message["content"])
       "  #{index}. #{role}: #{content}"
     end)
+  end
+
+  defp render_messages(messages, query, match_index) do
+    matches = transcript_matches(messages, query)
+
+    case matches do
+      [] ->
+        "  no matches for #{inspect(query)}"
+
+      _present ->
+        {_message, message_index} = Enum.at(matches, match_index)
+        start_index = max(message_index - 1, 0)
+        end_index = min(message_index + 1, length(messages) - 1)
+
+        visible_messages =
+          messages
+          |> Enum.with_index()
+          |> Enum.filter(fn {_message, index} -> index >= start_index and index <= end_index end)
+
+        [
+          "  match #{match_index + 1}/#{length(matches)} for #{inspect(query)}",
+          Enum.map_join(visible_messages, "\n", fn {message, index} ->
+            role = message["role"] || "unknown"
+            content = summarize(message["content"])
+            marker = if index == message_index, do: ">", else: " "
+            " #{marker} #{index + 1}. #{role}: #{content}"
+          end)
+        ]
+        |> Enum.join("\n")
+    end
   end
 
   defp render_receipts([]), do: "  none"
@@ -648,7 +769,7 @@ defmodule ClawCode.TUI do
   end
 
   defp help_text do
-    "Commands: chat <prompt>, resume <prompt>, resume <n|id|latest|running|completed|failed> <prompt>, open <n|id|latest|latest-running|latest-completed|running|completed|failed>, filter <all|running|completed|failed>, find <substring>, clear find, limit <n>, next, prev, cancel, provider <name|default>, model <name|default>, base-url <url>, clear base-url, tools auto|on|off, probe, refresh, help, quit"
+    "Commands: chat <prompt>, resume <prompt>, resume <n|id|latest|running|completed|failed> <prompt>, open <n|id|latest|latest-running|latest-completed|running|completed|failed>, filter <all|running|completed|failed>, find <substring>, clear find, find-msg <substring>, clear find-msg, next-hit, prev-hit, limit <n>, next, prev, cancel, provider <name|default>, model <name|default>, base-url <url>, clear base-url, tools auto|on|off, probe, refresh, help, quit"
   end
 
   defp step_session(%State{sessions: []} = state, _offset) do
@@ -710,6 +831,49 @@ defmodule ClawCode.TUI do
     end
   end
 
+  defp normalize_transcript_query(nil), do: nil
+
+  defp normalize_transcript_query(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      query -> query
+    end
+  end
+
+  defp normalize_transcript_state(%State{transcript_query: nil} = state) do
+    %{state | transcript_match_index: 0}
+  end
+
+  defp normalize_transcript_state(%State{} = state) do
+    match_count = transcript_match_count(state.selected_session, state.transcript_query)
+
+    cond do
+      match_count == 0 ->
+        %{state | transcript_match_index: 0}
+
+      state.transcript_match_index < 0 ->
+        %{state | transcript_match_index: 0}
+
+      state.transcript_match_index >= match_count ->
+        %{state | transcript_match_index: match_count - 1}
+
+      true ->
+        state
+    end
+  end
+
+  defp selected_transcript_hit_position(%State{transcript_query: nil}), do: "-"
+
+  defp selected_transcript_hit_position(%State{} = state) do
+    match_count = transcript_match_count(state.selected_session, state.transcript_query)
+
+    if match_count == 0 do
+      "0/0"
+    else
+      "#{state.transcript_match_index + 1}/#{match_count}"
+    end
+  end
+
   defp session_running?(session) do
     get_in(session, ["run_state", "status"]) == "running"
   end
@@ -740,6 +904,39 @@ defmodule ClawCode.TUI do
   defp message_search_text(%{"content" => content}) when is_binary(content), do: content
   defp message_search_text(%{"role" => role}) when is_binary(role), do: role
   defp message_search_text(_message), do: ""
+
+  defp transcript_match_count(nil, _query), do: 0
+  defp transcript_match_count(_session, nil), do: 0
+
+  defp transcript_match_count(session, query) do
+    session["messages"]
+    |> List.wrap()
+    |> transcript_matches(query)
+    |> length()
+  end
+
+  defp transcript_matches(messages, query) do
+    normalized_query = String.downcase(query)
+
+    messages
+    |> Enum.with_index()
+    |> Enum.filter(fn {message, _index} ->
+      message
+      |> message_search_text()
+      |> String.downcase()
+      |> String.contains?(normalized_query)
+    end)
+  end
+
+  defp transcript_notice(query, %State{} = state) do
+    match_count = transcript_match_count(state.selected_session, query)
+
+    if match_count == 0 do
+      "Transcript find set to #{query}. No matches."
+    else
+      "Transcript find set to #{query}. Hit 1/#{match_count}."
+    end
+  end
 
   defp summarize(nil), do: ""
 
