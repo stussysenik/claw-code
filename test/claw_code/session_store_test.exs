@@ -76,4 +76,23 @@ defmodule ClawCode.SessionStoreTest do
 
     assert Enum.map(sessions, & &1["id"]) == ["session-beta"]
   end
+
+  test "list ignores malformed or non-object json files" do
+    root = Path.join(System.tmp_dir!(), "claw-code-session-store-robust-list-test")
+    File.rm_rf(root)
+    File.mkdir_p!(root)
+
+    on_exit(fn -> File.rm_rf(root) end)
+
+    SessionStore.save(%{id: "session-1", prompt: "hello", output: "world", messages: []},
+      root: root
+    )
+
+    File.write!(Path.join(root, "broken.json"), "{not-json")
+    File.write!(Path.join(root, "array.json"), ~s(["not", "a", "session"]))
+
+    sessions = SessionStore.list(root: root, limit: 10)
+
+    assert Enum.map(sessions, & &1["id"]) == ["session-1"]
+  end
 end

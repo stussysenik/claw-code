@@ -55,9 +55,12 @@ defmodule ClawCode.SessionStore do
     |> Path.join("*.json")
     |> Path.wildcard()
     |> Enum.flat_map(fn path ->
-      case File.read(path) do
-        {:ok, contents} -> [Jason.decode!(contents)]
-        {:error, _reason} -> []
+      with {:ok, contents} <- File.read(path),
+           {:ok, decoded} <- Jason.decode(contents),
+           true <- is_map(decoded) do
+        [decoded]
+      else
+        _other -> []
       end
     end)
     |> Enum.sort_by(

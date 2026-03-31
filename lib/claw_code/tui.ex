@@ -13,6 +13,7 @@ defmodule ClawCode.TUI do
               session_query: nil,
               session_limit: 8,
               session_root: nil,
+              watch_interval_ms: nil,
               transcript_query: nil,
               transcript_match_index: 0,
               selected_session_id: nil,
@@ -38,6 +39,7 @@ defmodule ClawCode.TUI do
     session_query =
       normalize_session_query(Map.get(ui, :session_query, Keyword.get(opts, :query)))
 
+    watch_interval_ms = normalize_watch_interval(Map.get(ui, :watch_interval_ms))
     transcript_query = normalize_transcript_query(Map.get(ui, :transcript_query))
     transcript_match_index = Map.get(ui, :transcript_match_index, 0)
 
@@ -56,6 +58,7 @@ defmodule ClawCode.TUI do
       session_query: session_query,
       session_limit: session_limit,
       session_root: session_root,
+      watch_interval_ms: watch_interval_ms,
       transcript_query: transcript_query,
       transcript_match_index: transcript_match_index,
       selected_session_id: selected_session_id,
@@ -102,6 +105,9 @@ defmodule ClawCode.TUI do
 
       <<"find ", query::binary>> ->
         set_session_query(state, query)
+
+      <<"watch ", value::binary>> ->
+        set_watch_interval(state, value)
 
       "clear find-msg" ->
         clear_transcript_query(state)
@@ -161,6 +167,7 @@ defmodule ClawCode.TUI do
       "base_url=#{nested_value(state.doctor, [:base_url, :value]) || "missing"} selected=#{selected_session_position(state)}",
       "runs=running:#{count_sessions(state.all_sessions, &session_running?/1)} completed:#{count_sessions(state.all_sessions, &session_completed?/1)} failed:#{count_sessions(state.all_sessions, &session_failed?/1)}",
       "sessions=#{length(state.sessions)}/#{length(state.all_sessions)} filter=#{state.session_filter} limit=#{state.session_limit} query=#{state.session_query || "-"}",
+      "watch=#{watch_label(state.watch_interval_ms)}",
       "transcript_query=#{state.transcript_query || "-"} hit=#{selected_transcript_hit_position(state)}",
       "selected_run=#{selected_run_summary(state.selected_session)}",
       "selected_receipt=#{selected_receipt_summary(state.selected_session)}",
@@ -174,25 +181,35 @@ defmodule ClawCode.TUI do
       render_selected_session(state),
       "",
       "## Commands",
-      "chat <prompt> | resume <prompt> | resume <n|id|latest|running|completed|failed> <prompt> | open <n|id|latest|latest-running|latest-completed|running|completed|failed> | filter <all|running|completed|failed> | find <substring> | clear find | find-msg <substring> | clear find-msg | next-hit | prev-hit | limit <n> | next | prev | cancel | provider <name|default> | model <name|default> | base-url <url> | clear base-url | tools auto|on|off | probe | refresh | help | quit"
+      "chat <prompt> | resume <prompt> | resume <n|id|latest|running|completed|failed> <prompt> | open <n|id|latest|latest-running|latest-completed|running|completed|failed> | filter <all|running|completed|failed> | find <substring> | clear find | watch <seconds|on|off> | find-msg <substring> | clear find-msg | next-hit | prev-hit | limit <n> | next | prev | cancel | provider <name|default> | model <name|default> | base-url <url> | clear base-url | tools auto|on|off | probe | refresh | help | quit"
     ]
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join("\n")
   end
 
   defp loop(%State{} = state) do
+    input_reader = spawn_input_reader()
+    loop(state, input_reader)
+  end
+
+  defp loop(%State{} = state, input_reader) do
     IO.write(IO.ANSI.home() <> IO.ANSI.clear())
     IO.puts(render(state))
+    IO.write("\nclaw> ")
 
-    case IO.gets("\nclaw> ") do
-      nil ->
+    case next_loop_event(input_reader, state.watch_interval_ms) do
+      {:input, nil} ->
         :ok
 
-      input ->
+      {:input, input} ->
         case apply_command(state, input) do
-          {:continue, next_state} -> loop(next_state)
+          {:continue, next_state} -> loop(next_state, input_reader)
           {:halt, _state} -> :ok
         end
+
+      :timeout ->
+        {:continue, next_state} = refresh(state, nil)
+        loop(next_state, input_reader)
     end
   end
 
@@ -512,6 +529,20 @@ defmodule ClawCode.TUI do
     {:continue, next_state}
   end
 
+  defp set_watch_interval(%State{} = state, value) do
+    case parse_watch_value(value) do
+      {:ok, watch_interval_ms, notice} ->
+        next_state =
+          %{state | watch_interval_ms: watch_interval_ms, notice: notice}
+          |> normalize_transcript_state()
+
+        {:continue, next_state}
+
+      {:error, message} ->
+        {:continue, %{state | notice: message}}
+    end
+  end
+
   defp set_transcript_query(%State{} = state, value) do
     transcript_query = normalize_transcript_query(value)
 
@@ -587,6 +618,7 @@ defmodule ClawCode.TUI do
       session_filter: state.session_filter || :all,
       session_query: state.session_query,
       session_limit: state.session_limit || 8,
+      watch_interval_ms: state.watch_interval_ms,
       transcript_query: state.transcript_query,
       transcript_match_index: state.transcript_match_index || 0
     }
@@ -801,7 +833,7 @@ defmodule ClawCode.TUI do
   end
 
   defp help_text do
-    "Commands: chat <prompt>, resume <prompt>, resume <n|id|latest|running|completed|failed> <prompt>, open <n|id|latest|latest-running|latest-completed|running|completed|failed>, filter <all|running|completed|failed>, find <substring>, clear find, find-msg <substring>, clear find-msg, next-hit, prev-hit, limit <n>, next, prev, cancel, provider <name|default>, model <name|default>, base-url <url>, clear base-url, tools auto|on|off, probe, refresh, help, quit"
+    "Commands: chat <prompt>, resume <prompt>, resume <n|id|latest|running|completed|failed> <prompt>, open <n|id|latest|latest-running|latest-completed|running|completed|failed>, filter <all|running|completed|failed>, find <substring>, clear find, watch <seconds|on|off>, find-msg <substring>, clear find-msg, next-hit, prev-hit, limit <n>, next, prev, cancel, provider <name|default>, model <name|default>, base-url <url>, clear base-url, tools auto|on|off, probe, refresh, help, quit"
   end
 
   defp step_session(%State{sessions: []} = state, _offset) do
@@ -896,6 +928,36 @@ defmodule ClawCode.TUI do
       query -> query
     end
   end
+
+  defp normalize_watch_interval(nil), do: nil
+
+  defp normalize_watch_interval(value) when is_integer(value) and value > 0, do: value
+  defp normalize_watch_interval(_value), do: nil
+
+  defp parse_watch_value(value) do
+    case String.trim(String.downcase(value)) do
+      "" ->
+        {:error, "Watch interval is required."}
+
+      "off" ->
+        {:ok, nil, "Watch disabled."}
+
+      "on" ->
+        {:ok, 2_000, "Watch enabled at 2s."}
+
+      seconds ->
+        case Integer.parse(seconds) do
+          {parsed, ""} when parsed > 0 ->
+            {:ok, parsed * 1_000, "Watch enabled at #{parsed}s."}
+
+          _other ->
+            {:error, "Watch interval must be `on`, `off`, or a positive integer."}
+        end
+    end
+  end
+
+  defp watch_label(nil), do: "off"
+  defp watch_label(interval_ms), do: "#{div(interval_ms, 1_000)}s"
 
   defp normalize_transcript_query(nil), do: nil
 
@@ -1010,6 +1072,39 @@ defmodule ClawCode.TUI do
     session
     |> Map.get("tool_receipts", [])
     |> List.last()
+  end
+
+  defp spawn_input_reader do
+    parent = self()
+
+    spawn_link(fn ->
+      input_reader_loop(parent)
+    end)
+  end
+
+  defp input_reader_loop(parent) do
+    case IO.gets("") do
+      nil ->
+        send(parent, {:tui_input, nil})
+
+      input ->
+        send(parent, {:tui_input, input})
+        input_reader_loop(parent)
+    end
+  end
+
+  defp next_loop_event(_input_reader, nil) do
+    receive do
+      {:tui_input, input} -> {:input, input}
+    end
+  end
+
+  defp next_loop_event(_input_reader, watch_interval_ms) do
+    receive do
+      {:tui_input, input} -> {:input, input}
+    after
+      watch_interval_ms -> :timeout
+    end
   end
 
   defp summarize(nil), do: ""

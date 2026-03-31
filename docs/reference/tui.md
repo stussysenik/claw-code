@@ -31,6 +31,7 @@ It stays intentionally small:
 - recent session list
 - selected transcript and receipts
 - aggregate run counts plus selected-session run and receipt summaries
+- optional `watch <seconds|on|off>` auto-refresh cadence for active monitoring
 - daemon-backed `chat` and `resume`
 - in-client `provider`, `model`, and `base-url` switching, including reset-to-default
 - in-client `probe` for the active provider configuration

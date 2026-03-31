@@ -59,6 +59,7 @@ defmodule ClawCode.TUITest do
     assert output =~ "selected=1/1"
     assert output =~ "runs=running:0 completed:1 failed:0"
     assert output =~ "filter=all limit=8 query=-"
+    assert output =~ "watch=off"
     assert output =~ "transcript_query=- hit=-"
     assert output =~ "selected_run=idle last_stop=completed"
     assert output =~ "selected_receipt=none"
@@ -121,6 +122,38 @@ defmodule ClawCode.TUITest do
     assert output =~ "selected_receipt=shell:ok:42ms"
     assert output =~ "last_receipt=shell ok 42ms 2026-03-31T20:00:02Z"
     assert output =~ "1. shell ok 42ms 2026-03-31T20:00:02Z"
+  end
+
+  test "watch command updates refresh cadence" do
+    state = %State{
+      opts: [provider: "generic"],
+      daemon_status: %{"status" => "running"},
+      doctor: %{provider: "generic", model: %{value: "test-model"}, tool_policy: :auto},
+      all_sessions: [],
+      sessions: [],
+      session_filter: :all,
+      session_limit: 8,
+      session_root: System.tmp_dir!(),
+      selected_session_id: nil,
+      selected_session: nil
+    }
+
+    {:continue, on_state} = TUI.apply_command(state, "watch on")
+    assert on_state.watch_interval_ms == 2_000
+    assert on_state.notice =~ "2s"
+    assert TUI.render(on_state) =~ "watch=2s"
+
+    {:continue, custom_state} = TUI.apply_command(on_state, "watch 5")
+    assert custom_state.watch_interval_ms == 5_000
+    assert custom_state.notice =~ "5s"
+
+    {:continue, off_state} = TUI.apply_command(custom_state, "watch off")
+    assert off_state.watch_interval_ms == nil
+    assert off_state.notice =~ "disabled"
+
+    {:continue, invalid_state} = TUI.apply_command(off_state, "watch nope")
+    assert invalid_state.watch_interval_ms == nil
+    assert invalid_state.notice =~ "positive integer"
   end
 
   test "open command selects a session by index" do
