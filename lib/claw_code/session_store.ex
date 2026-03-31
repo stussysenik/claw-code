@@ -18,10 +18,15 @@ defmodule ClawCode.SessionStore do
     write(payload, opts) |> elem(0)
   end
 
+  def path(session_id, opts \\ []) do
+    root = Keyword.get(opts, :root, root_dir())
+    Path.join(root, "#{session_id}.json")
+  end
+
   def write(payload, opts \\ []) do
     root = Keyword.get(opts, :root, root_dir())
     id = Map.get(payload, :id) || Map.get(payload, "id") || new_id()
-    path = Path.join(root, "#{id}.json")
+    path = path(id, root: root)
     temp_path = Path.join(root, ".#{id}.json.tmp-#{System.unique_integer([:positive])}")
 
     try do
@@ -38,9 +43,7 @@ defmodule ClawCode.SessionStore do
   end
 
   def load(session_id, opts \\ []) do
-    root = Keyword.get(opts, :root, root_dir())
-    path = Path.join(root, "#{session_id}.json")
-    path |> File.read!() |> Jason.decode!()
+    path(session_id, opts) |> File.read!() |> Jason.decode!()
   end
 
   def list(opts \\ []) do
@@ -64,8 +67,7 @@ defmodule ClawCode.SessionStore do
   end
 
   def fetch(session_id, opts \\ []) do
-    root = Keyword.get(opts, :root, root_dir())
-    path = Path.join(root, "#{session_id}.json")
+    path = path(session_id, opts)
 
     case File.read(path) do
       {:ok, contents} -> {:ok, Jason.decode!(contents)}
@@ -88,6 +90,7 @@ defmodule ClawCode.SessionStore do
     |> Map.put_new("messages", [])
     |> Map.put_new("tool_receipts", [])
     |> Map.put_new("turns", 0)
+    |> Map.put_new("run_state", %{"status" => "idle"})
     |> Map.put("requirements", requirements_ledger())
   end
 

@@ -134,6 +134,25 @@ defmodule ClawCode.CLI do
             1
         end
 
+      ["cancel-session", session_id | rest] ->
+        with {:ok, opts, _args} <- parse_opts(rest),
+             {:ok, _cancelled} <- normalize_cancel(Runtime.cancel(session_id, opts)) do
+          IO.puts("Cancelled session: #{session_id}")
+          0
+        else
+          {:error, :not_found} ->
+            IO.puts("Session not found: #{session_id}")
+            1
+
+          {:error, :not_running} ->
+            IO.puts("Session is not running: #{session_id}")
+            1
+
+          {:error, message} when is_binary(message) ->
+            IO.puts(message)
+            1
+        end
+
       ["symphony" | rest] ->
         {opts, args, _invalid} = OptionParser.parse(rest, strict: @switches)
         opts = normalize_opts(opts)
@@ -260,10 +279,11 @@ defmodule ClawCode.CLI do
         id = session["id"]
         updated_at = session["updated_at"] || session["saved_at"] || "unknown"
         stop_reason = session["stop_reason"] || "unknown"
+        run_status = get_in(session, ["run_state", "status"]) || "unknown"
         messages = length(session["messages"] || [])
         receipts = length(session["tool_receipts"] || [])
 
-        "#{id}\t#{updated_at}\tstop=#{stop_reason}\tmessages=#{messages}\treceipts=#{receipts}"
+        "#{id}\t#{updated_at}\trun=#{run_status}\tstop=#{stop_reason}\tmessages=#{messages}\treceipts=#{receipts}"
       end)
     ]
     |> Enum.join("\n")
@@ -281,6 +301,7 @@ defmodule ClawCode.CLI do
       "#{length(messages)} messages",
       "requirements=#{length(requirements)}",
       "tool_receipts=#{length(tool_receipts)}",
+      "run=#{get_in(session, ["run_state", "status"]) || "unknown"}",
       "stop=#{session["stop_reason"]}",
       render_messages(messages, Keyword.get(opts, :show_messages, false)),
       render_receipts(tool_receipts, Keyword.get(opts, :show_receipts, false))
@@ -405,6 +426,11 @@ defmodule ClawCode.CLI do
   defp chat_exit_code(%{stop_reason: "completed"}), do: 0
   defp chat_exit_code(_result), do: 1
 
+  defp normalize_cancel({:ok, {_path, document}}), do: {:ok, document}
+  defp normalize_cancel({:error, :not_running}), do: {:error, :not_running}
+  defp normalize_cancel({:error, :not_found}), do: {:error, :not_found}
+  defp normalize_cancel(other), do: other
+
   defp normalize_opts(opts) do
     if Keyword.get(opts, :no_native, false) do
       Keyword.put(opts, :native, false)
@@ -442,6 +468,7 @@ defmodule ClawCode.CLI do
       bootstrap <prompt> [--limit N] [--native|--no-native]
       chat <prompt> [--session-id ID] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--max-turns N] [--allow-shell] [--allow-write] [--native|--no-native]
       resume-session <session_id> <prompt> [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--max-turns N] [--allow-shell] [--allow-write] [--native|--no-native]
+      cancel-session <session_id>
       symphony <prompt> [--limit N] [--native|--no-native]
       turn-loop <prompt> ...
       show-command <name>

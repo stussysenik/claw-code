@@ -49,110 +49,185 @@ defmodule ClawCode.Runtime do
     {:ok, session_id, session_pid} =
       SessionServer.ensure_started(opts[:session_id], session_server_opts(opts))
 
-    session = SessionServer.snapshot(session_pid)
-    messages = seed_messages(prompt, matches, session["messages"] || [])
-    existing_receipts = session["tool_receipts"] || []
-    existing_turns = session["turns"] || 0
+    case SessionServer.begin_run(session_pid) do
+      {:ok, session} ->
+        messages = seed_messages(prompt, matches, session["messages"] || [])
+        existing_receipts = session["tool_receipts"] || []
+        existing_turns = session["turns"] || 0
 
-    if OpenAICompatible.configured?(config) do
-      tool_specs = Builtin.specs(opts)
+        context = %{
+          prompt: prompt,
+          config: config,
+          matches: matches,
+          opts: opts,
+          session_id: session_id,
+          session_pid: session_pid,
+          existing_turns: existing_turns,
+          requirements: SessionStore.requirements_ledger()
+        }
 
-      case loop(
-             messages,
-             config,
-             tool_specs,
-             opts,
-             1,
-             Keyword.get(opts, :max_turns, 6),
-             existing_receipts
-           ) do
-        {:ok, final_messages, output, stop_reason, turns, receipts} ->
-          persist_result(
+        checkpoint_result(session_pid, context, messages, existing_receipts, existing_turns)
+
+        if OpenAICompatible.configured?(config) do
+          task =
+            Task.Supervisor.async_nolink(ClawCode.TaskSupervisor, fn ->
+              run_chat_session(context, messages, existing_receipts)
+            end)
+
+          case SessionServer.attach_run(session_pid, task.pid) do
+            :ok ->
+              await_run(task, context)
+
+            {:error, :not_running} ->
+              _ = Task.shutdown(task, :brutal_kill)
+              interrupted_result(context)
+          end
+        else
+          finalize_result(
             session_pid,
             prompt,
-            output,
-            stop_reason,
-            existing_turns + turns,
-            config,
-            matches,
-            final_messages,
-            receipts,
-            session_id
-          )
-
-        {:error, message, final_messages, receipts} ->
-          persist_result(
-            session_pid,
-            prompt,
-            message,
-            "provider_error",
+            missing_provider_message(config),
+            "missing_provider_config",
             existing_turns,
             config,
             matches,
-            final_messages,
-            receipts,
-            session_id
+            messages,
+            existing_receipts,
+            session_id,
+            context.requirements
           )
-      end
-    else
-      persist_result(
-        session_pid,
-        prompt,
-        missing_provider_message(config),
-        "missing_provider_config",
-        existing_turns,
-        config,
-        matches,
-        messages,
-        existing_receipts,
-        session_id
-      )
+        end
+
+      {:error, :session_busy, session} ->
+        busy_result(session_id, session, config, matches, prompt, opts)
     end
   end
 
-  defp loop(messages, _config, _tools, _opts, turn, max_turns, receipts) when turn > max_turns do
+  def cancel(session_id, opts \\ []) do
+    case SessionStore.fetch(session_id, session_server_opts(opts)) do
+      {:ok, _session} ->
+        with {:ok, ^session_id, session_pid} <-
+               SessionServer.ensure_started(session_id, session_server_opts(opts)) do
+          SessionServer.cancel_run(session_pid)
+        end
+
+      :error ->
+        {:error, :not_found}
+    end
+  end
+
+  defp run_chat_session(context, messages, existing_receipts) do
+    tool_specs = Builtin.specs(context.opts)
+
+    case loop(
+           context.session_pid,
+           context,
+           messages,
+           context.config,
+           tool_specs,
+           context.opts,
+           1,
+           Keyword.get(context.opts, :max_turns, 6),
+           existing_receipts
+         ) do
+      {:ok, final_messages, output, stop_reason, turns, receipts} ->
+        finalize_result(
+          context.session_pid,
+          context.prompt,
+          output,
+          stop_reason,
+          context.existing_turns + turns,
+          context.config,
+          context.matches,
+          final_messages,
+          receipts,
+          context.session_id,
+          context.requirements
+        )
+
+      {:error, message, final_messages, receipts, turns} ->
+        finalize_result(
+          context.session_pid,
+          context.prompt,
+          message,
+          "provider_error",
+          context.existing_turns + turns,
+          context.config,
+          context.matches,
+          final_messages,
+          receipts,
+          context.session_id,
+          context.requirements
+        )
+    end
+  end
+
+  defp loop(_session_pid, _context, messages, _config, _tools, _opts, turn, max_turns, receipts)
+       when turn > max_turns do
     {:ok, messages, "Tool loop limit reached.", "max_turns_reached", max_turns, receipts}
   end
 
-  defp loop(messages, config, tools, opts, turn, max_turns, receipts) do
+  defp loop(session_pid, context, messages, config, tools, opts, turn, max_turns, receipts) do
     case OpenAICompatible.chat(config, messages, tools: tools) do
       {:ok, %{"choices" => [%{"message" => message} | _]}} ->
         assistant_message = normalize_assistant_message(message)
+        assistant_messages = messages ++ [assistant_message]
+
+        checkpoint_result(
+          session_pid,
+          context,
+          assistant_messages,
+          receipts,
+          context.existing_turns + turn
+        )
 
         case tool_calls_from(message) do
           [] ->
-            {:ok, messages ++ [assistant_message], content_from(message), "completed", turn,
-             receipts}
+            {:ok, assistant_messages, content_from(message), "completed", turn, receipts}
 
           tool_calls ->
             {tool_messages, new_receipts} =
               Enum.map(tool_calls, fn tool_call ->
-                execute_tool_call(tool_call, opts)
+                execute_tool_call(tool_call, opts, turn)
               end)
               |> Enum.unzip()
 
+            next_messages = assistant_messages ++ tool_messages
+            next_receipts = receipts ++ new_receipts
+
+            checkpoint_result(
+              session_pid,
+              context,
+              next_messages,
+              next_receipts,
+              context.existing_turns + turn
+            )
+
             loop(
-              messages ++ [assistant_message] ++ tool_messages,
+              session_pid,
+              context,
+              next_messages,
               config,
               tools,
               opts,
               turn + 1,
               max_turns,
-              receipts ++ new_receipts
+              next_receipts
             )
         end
 
       {:ok, _unexpected} ->
-        {:error, "provider returned no choices", messages, receipts}
+        {:error, "provider returned no choices", messages, receipts, max(turn - 1, 0)}
 
       {:error, reason} ->
-        {:error, reason, messages, receipts}
+        {:error, reason, messages, receipts, max(turn - 1, 0)}
     end
   end
 
   defp execute_tool_call(
          %{"id" => id, "function" => %{"name" => name, "arguments" => arguments}},
-         opts
+         opts,
+         turn
        ) do
     parsed_arguments =
       case Jason.decode(arguments) do
@@ -163,10 +238,10 @@ defmodule ClawCode.Runtime do
     {content, receipt} =
       case Builtin.execute_with_receipt(name, parsed_arguments, opts) do
         {:ok, output, receipt} ->
-          {output, normalize_tool_receipt(receipt, id, name, parsed_arguments)}
+          {output, normalize_tool_receipt(receipt, id, name, parsed_arguments, turn)}
 
         {:error, message, receipt} ->
-          {"error: #{message}", normalize_tool_receipt(receipt, id, name, parsed_arguments)}
+          {"error: #{message}", normalize_tool_receipt(receipt, id, name, parsed_arguments, turn)}
       end
 
     {
@@ -180,7 +255,7 @@ defmodule ClawCode.Runtime do
     }
   end
 
-  defp persist_result(
+  defp finalize_result(
          session_pid,
          prompt,
          output,
@@ -190,10 +265,9 @@ defmodule ClawCode.Runtime do
          matches,
          messages,
          tool_receipts,
-         session_id
+         session_id,
+         requirements
        ) do
-    requirements = SessionStore.requirements_ledger()
-
     payload = %{
       id: session_id,
       prompt: prompt,
@@ -207,7 +281,7 @@ defmodule ClawCode.Runtime do
       requirements: requirements
     }
 
-    {path, document} = SessionServer.persist(session_pid, payload)
+    {path, document} = SessionServer.finish_run(session_pid, payload)
 
     %Result{
       prompt: prompt,
@@ -223,6 +297,72 @@ defmodule ClawCode.Runtime do
       matched_commands: Enum.filter(matches, &(&1.kind == :command)),
       matched_tools: Enum.filter(matches, &(&1.kind == :tool)),
       messages: messages
+    }
+  end
+
+  defp checkpoint_result(session_pid, context, messages, tool_receipts, turns) do
+    SessionServer.checkpoint(session_pid, %{
+      id: context.session_id,
+      prompt: context.prompt,
+      turns: turns,
+      provider: provider_snapshot(context.config),
+      routed_matches: Enum.map(context.matches, &Map.from_struct/1),
+      messages: messages,
+      tool_receipts: tool_receipts,
+      requirements: context.requirements
+    })
+  end
+
+  defp await_run(task, context) do
+    case Task.yield(task, :infinity) do
+      {:ok, result} ->
+        result
+
+      {:exit, _reason} ->
+        interrupted_result(context)
+
+      nil ->
+        _ = Task.shutdown(task, :brutal_kill)
+        interrupted_result(context)
+    end
+  end
+
+  defp busy_result(session_id, session, config, matches, prompt, opts) do
+    %Result{
+      prompt: prompt,
+      output: "Session #{session_id} already has an active run.",
+      stop_reason: "session_busy",
+      session_path: SessionStore.path(session_id, session_server_opts(opts)),
+      session_id: session_id,
+      turns: session["turns"] || 0,
+      provider: config.provider,
+      requirements: session["requirements"] || SessionStore.requirements_ledger(),
+      tool_receipts: session["tool_receipts"] || [],
+      routed_matches: matches,
+      matched_commands: Enum.filter(matches, &(&1.kind == :command)),
+      matched_tools: Enum.filter(matches, &(&1.kind == :tool)),
+      messages: session["messages"] || []
+    }
+  end
+
+  defp interrupted_result(context) do
+    session = SessionServer.snapshot(context.session_pid)
+    stop_reason = session["stop_reason"] || "run_interrupted"
+
+    %Result{
+      prompt: context.prompt,
+      output: session["output"] || "Session run ended before a final reply was returned.",
+      stop_reason: stop_reason,
+      session_path: SessionStore.path(context.session_id, session_server_opts(context.opts)),
+      session_id: context.session_id,
+      turns: session["turns"] || context.existing_turns,
+      provider: context.config.provider,
+      requirements: session["requirements"] || context.requirements,
+      tool_receipts: session["tool_receipts"] || [],
+      routed_matches: context.matches,
+      matched_commands: Enum.filter(context.matches, &(&1.kind == :command)),
+      matched_tools: Enum.filter(context.matches, &(&1.kind == :tool)),
+      messages: session["messages"] || []
     }
   end
 
@@ -304,8 +444,9 @@ defmodule ClawCode.Runtime do
       "and model from #{Enum.join(envs.model, "/")}."
   end
 
-  defp normalize_tool_receipt(receipt, id, name, arguments) do
+  defp normalize_tool_receipt(receipt, id, name, arguments, turn) do
     Map.merge(receipt, %{
+      turn: turn,
       tool_call_id: id,
       tool_name: name,
       argument_keys: arguments |> Map.keys() |> Enum.sort()

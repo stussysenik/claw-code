@@ -110,6 +110,142 @@ defmodule ClawCode.RuntimeTest do
     refute Map.has_key?(session["provider"], "api_key")
   end
 
+  test "chat rejects a concurrent run on the same session id" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "claw-code-runtime-busy-test-#{System.unique_integer([:positive])}"
+      )
+
+    responses = [
+      {Jason.encode!(%{
+         "choices" => [%{"message" => %{"role" => "assistant", "content" => "first response"}}]
+       }), 250}
+    ]
+
+    {base_url, listener, server} = start_stub_server(responses)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    session_id = "busy-session"
+
+    first_task =
+      Task.async(fn ->
+        Runtime.chat("first prompt",
+          provider: "generic",
+          base_url: base_url,
+          api_key: "test-key",
+          model: "test-model",
+          session_id: session_id,
+          session_root: root,
+          native: false
+        )
+      end)
+
+    assert wait_until(fn ->
+             case SessionStore.fetch(session_id, root: root) do
+               {:ok, session} -> get_in(session, ["run_state", "status"]) == "running"
+               :error -> false
+             end
+           end)
+
+    second =
+      Runtime.chat("second prompt",
+        provider: "generic",
+        base_url: base_url,
+        api_key: "test-key",
+        model: "test-model",
+        session_id: session_id,
+        session_root: root,
+        native: false
+      )
+
+    assert second.stop_reason == "session_busy"
+    assert second.output =~ "already has an active run"
+
+    first = Task.await(first_task, 2_000)
+    assert first.stop_reason == "completed"
+  end
+
+  test "chat checkpoints tool receipts before the final provider reply" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "claw-code-runtime-checkpoint-test-#{System.unique_integer([:positive])}"
+      )
+
+    session_id = "checkpoint-session"
+
+    responses = [
+      Jason.encode!(%{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => nil,
+              "tool_calls" => [
+                %{
+                  "id" => "call_1",
+                  "type" => "function",
+                  "function" => %{
+                    "name" => "shell",
+                    "arguments" => Jason.encode!(%{"command" => "printf shell-ok"})
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }),
+      {Jason.encode!(%{
+         "choices" => [%{"message" => %{"role" => "assistant", "content" => "done"}}]
+       }), 750}
+    ]
+
+    {base_url, listener, server} = start_stub_server(responses)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    task =
+      Task.async(fn ->
+        Runtime.chat("run a shell command",
+          provider: "generic",
+          base_url: base_url,
+          api_key: "test-key",
+          model: "test-model",
+          session_id: session_id,
+          session_root: root,
+          allow_shell: true,
+          native: false
+        )
+      end)
+
+    assert wait_until(fn ->
+             case SessionStore.fetch(session_id, root: root) do
+               {:ok, session} ->
+                 length(session["tool_receipts"] || []) == 1 and
+                   session["stop_reason"] == "running"
+
+               :error ->
+                 false
+             end
+           end)
+
+    session = SessionStore.load(session_id, root: root)
+    assert get_in(session, ["run_state", "status"]) == "running"
+    assert hd(session["tool_receipts"])["turn"] == 1
+    assert hd(session["tool_receipts"])["tool_name"] == "shell"
+
+    result = Task.await(task, 2_000)
+    assert result.stop_reason == "completed"
+  end
+
   test "chat resumes an existing session when session_id is provided" do
     responses = [
       %{
@@ -173,7 +309,56 @@ defmodule ClawCode.RuntimeTest do
     assert List.last(session["messages"])["content"] == "second response"
   end
 
-  defp start_stub_server(bodies) do
+  test "chat can be cancelled through the runtime api" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "claw-code-runtime-cancel-test-#{System.unique_integer([:positive])}"
+      )
+
+    session_id = "cancel-session"
+
+    responses = [
+      {Jason.encode!(%{
+         "choices" => [%{"message" => %{"role" => "assistant", "content" => "late reply"}}]
+       }), 500}
+    ]
+
+    {base_url, listener, server} = start_stub_server(responses)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    task =
+      Task.async(fn ->
+        Runtime.chat("slow prompt",
+          provider: "generic",
+          base_url: base_url,
+          api_key: "test-key",
+          model: "test-model",
+          session_id: session_id,
+          session_root: root,
+          native: false
+        )
+      end)
+
+    assert wait_until(fn ->
+             case SessionStore.fetch(session_id, root: root) do
+               {:ok, session} -> get_in(session, ["run_state", "status"]) == "running"
+               :error -> false
+             end
+           end)
+
+    assert {:ok, {_path, cancelled}} = Runtime.cancel(session_id, session_root: root)
+    assert cancelled["stop_reason"] == "cancelled"
+
+    result = Task.await(task, 2_000)
+    assert result.stop_reason == "cancelled"
+  end
+
+  defp start_stub_server(responses) do
     {:ok, listener} =
       :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true])
 
@@ -181,16 +366,23 @@ defmodule ClawCode.RuntimeTest do
 
     server =
       spawn_link(fn ->
-        serve_responses(listener, bodies)
+        serve_responses(listener, responses)
       end)
 
     {"http://127.0.0.1:#{port}/v1", listener, server}
   end
 
-  defp serve_responses(listener, bodies) do
-    Enum.each(bodies, fn body ->
+  defp serve_responses(listener, responses) do
+    Enum.each(responses, fn response ->
+      {body, delay_ms} =
+        case response do
+          {body, delay_ms} -> {body, delay_ms}
+          body -> {body, 0}
+        end
+
       {:ok, socket} = :gen_tcp.accept(listener)
       {:ok, _request} = read_request(socket, "")
+      Process.sleep(delay_ms)
       :ok = :gen_tcp.send(socket, http_response(body))
       :gen_tcp.close(socket)
     end)
@@ -244,4 +436,17 @@ defmodule ClawCode.RuntimeTest do
     ]
     |> IO.iodata_to_binary()
   end
+
+  defp wait_until(fun, attempts \\ 40)
+
+  defp wait_until(fun, attempts) when attempts > 0 do
+    if fun.() do
+      true
+    else
+      Process.sleep(25)
+      wait_until(fun, attempts - 1)
+    end
+  end
+
+  defp wait_until(_fun, 0), do: false
 end

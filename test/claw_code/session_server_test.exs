@@ -4,7 +4,12 @@ defmodule ClawCode.SessionServerTest do
   alias ClawCode.{SessionServer, SessionStore}
 
   test "session server persists and snapshots a session" do
-    root = Path.join(System.tmp_dir!(), "claw-code-session-server-test")
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "claw-code-session-server-test-#{System.unique_integer([:positive])}"
+      )
+
     {:ok, session_id, pid} = SessionServer.ensure_started("session-server", root: root)
 
     on_exit(fn ->
@@ -28,5 +33,58 @@ defmodule ClawCode.SessionServerTest do
     persisted = SessionStore.load(session_id, root: root)
     assert persisted["messages"] == [%{"role" => "user", "content" => "hello"}]
     assert persisted["turns"] == 1
+  end
+
+  test "session server preserves created_at across multiple writes" do
+    root = Path.join(System.tmp_dir!(), "claw-code-session-server-created-at-test")
+    {:ok, session_id, pid} = SessionServer.ensure_started("session-created", root: root)
+
+    on_exit(fn ->
+      SessionServer.close(pid)
+    end)
+
+    {_path, first} = SessionServer.persist(pid, %{"prompt" => "first", "output" => "one"})
+    Process.sleep(1_000)
+    {_path, second} = SessionServer.persist(pid, %{"prompt" => "second", "output" => "two"})
+
+    assert first["created_at"] == second["created_at"]
+    assert first["saved_at"] != second["saved_at"]
+
+    persisted = SessionStore.load(session_id, root: root)
+    assert persisted["created_at"] == first["created_at"]
+  end
+
+  test "session server enforces a single active run and can cancel it" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "claw-code-session-server-run-test-#{System.unique_integer([:positive])}"
+      )
+
+    {:ok, session_id, pid} = SessionServer.ensure_started("session-runner", root: root)
+
+    on_exit(fn ->
+      SessionServer.close(pid)
+    end)
+
+    {:ok, document} = SessionServer.begin_run(pid)
+    assert document["run_state"]["status"] == "running"
+
+    task_pid =
+      spawn(fn ->
+        Process.sleep(5_000)
+      end)
+
+    monitor_ref = Process.monitor(task_pid)
+    assert :ok = SessionServer.attach_run(pid, task_pid)
+    assert {:error, :session_busy, _document} = SessionServer.begin_run(pid)
+
+    assert {:ok, {_path, cancelled}} = SessionServer.cancel_run(pid)
+    assert cancelled["stop_reason"] == "cancelled"
+    assert cancelled["run_state"]["last_stop_reason"] == "cancelled"
+    assert_receive {:DOWN, ^monitor_ref, :process, ^task_pid, :killed}, 1_000
+
+    persisted = SessionStore.load(session_id, root: root)
+    assert persisted["stop_reason"] == "cancelled"
   end
 end

@@ -85,11 +85,12 @@ Sessions live under `.claw/sessions/` and can be resumed by explicit id.
 ./claw_code chat --session-id my-session --provider kimi "inspect this repo"
 ./claw_code resume-session my-session --provider kimi "continue from the last state"
 ./claw_code sessions --limit 10
+./claw_code cancel-session my-session
 ./claw_code load-session my-session
 ./claw_code load-session my-session --show-messages --show-receipts
 ```
 
-`load-session` exposes `created=` and `updated=` timestamps together with message and receipt counts. `sessions` gives a fast index of recent session ids, stop reasons, and receipt counts so operator work stays inspectable from the CLI.
+`load-session` exposes `created=` and `updated=` timestamps together with message and receipt counts. `sessions` gives a fast index of recent session ids, run states, stop reasons, and receipt counts, and `cancel-session` lets you terminate a hung run without losing the persisted session state.
 
 ## Provider Setup
 
