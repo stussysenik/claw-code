@@ -120,7 +120,7 @@ The design goal is not a network service or a distributed node mesh. It is a bor
 
 The final UX can absolutely include a full terminal UI, and the correct layering stays engine first: the Elixir runtime and daemon remain the product core, and the TUI is a client over that control plane instead of the architectural center.
 
-`./claw_code tui` is the first in-repo slice of that client. It is intentionally minimal: recent sessions, selected transcript, tool receipts, in-client provider/model/base-url switching with reset-to-default, and a command loop for `chat`, `resume`, `open`, `next`, `prev`, `cancel`, and `tools`.
+`./claw_code tui` is the first in-repo slice of that client. It is intentionally minimal: recent sessions, selected transcript, tool receipts, in-client provider/model/base-url switching with reset-to-default, session filtering and limits, and a command loop for `chat`, `resume`, `open`, `next`, `prev`, `cancel`, and `tools`.
 
 ## Provider Setup
 

@@ -3,8 +3,19 @@ defmodule ClawCode.TUITest do
 
   alias ClawCode.TUI
   alias ClawCode.TUI.State
+  alias ClawCode.SessionStore
 
   test "render includes session list and selected transcript" do
+    sessions = [
+      %{
+        "id" => "session-a",
+        "updated_at" => "2026-03-31T19:00:00Z",
+        "stop_reason" => "completed",
+        "messages" => [%{"role" => "user", "content" => "hello"}],
+        "tool_receipts" => []
+      }
+    ]
+
     state = %State{
       opts: [provider: "generic", tools: false],
       daemon_status: %{"status" => "running"},
@@ -13,15 +24,10 @@ defmodule ClawCode.TUITest do
         model: %{value: "test-model"},
         tool_policy: :disabled
       },
-      sessions: [
-        %{
-          "id" => "session-a",
-          "updated_at" => "2026-03-31T19:00:00Z",
-          "stop_reason" => "completed",
-          "messages" => [%{"role" => "user", "content" => "hello"}],
-          "tool_receipts" => []
-        }
-      ],
+      all_sessions: sessions,
+      sessions: sessions,
+      session_filter: :all,
+      session_limit: 8,
       session_root: "/tmp/claw",
       selected_session_id: "session-a",
       selected_session: %{
@@ -41,19 +47,25 @@ defmodule ClawCode.TUITest do
     assert output =~ "# Claw Code TUI"
     assert output =~ "provider=generic"
     assert output =~ "selected=1/1"
+    assert output =~ "filter=all limit=8"
     assert output =~ "session-a"
     assert output =~ "assistant: world"
   end
 
   test "open command selects a session by index" do
+    sessions = [
+      %{"id" => "session-a", "messages" => [], "tool_receipts" => []},
+      %{"id" => "session-b", "messages" => [], "tool_receipts" => []}
+    ]
+
     state = %State{
       opts: [],
       daemon_status: %{"status" => "running"},
       doctor: %{provider: "generic", model: %{value: "test-model"}, tool_policy: :auto},
-      sessions: [
-        %{"id" => "session-a", "messages" => [], "tool_receipts" => []},
-        %{"id" => "session-b", "messages" => [], "tool_receipts" => []}
-      ],
+      all_sessions: sessions,
+      sessions: sessions,
+      session_filter: :all,
+      session_limit: 8,
       session_root: System.tmp_dir!(),
       selected_session_id: "session-a",
       selected_session: nil
@@ -70,7 +82,10 @@ defmodule ClawCode.TUITest do
       opts: [provider: "generic"],
       daemon_status: %{"status" => "unknown", "session_root" => System.tmp_dir!()},
       doctor: %{provider: "generic", model: %{value: "test-model"}, tool_policy: :auto},
+      all_sessions: [],
       sessions: [],
+      session_filter: :all,
+      session_limit: 8,
       session_root: System.tmp_dir!(),
       selected_session_id: nil,
       selected_session: nil
@@ -95,7 +110,10 @@ defmodule ClawCode.TUITest do
         base_url: %{value: nil},
         tool_policy: :auto
       },
+      all_sessions: [],
       sessions: [],
+      session_filter: :all,
+      session_limit: 8,
       session_root: System.tmp_dir!(),
       selected_session_id: nil,
       selected_session: nil
@@ -128,7 +146,10 @@ defmodule ClawCode.TUITest do
         base_url: %{value: nil},
         tool_policy: :auto
       },
+      all_sessions: [],
       sessions: [],
+      session_filter: :all,
+      session_limit: 8,
       session_root: System.tmp_dir!(),
       selected_session_id: nil,
       selected_session: nil
@@ -144,6 +165,12 @@ defmodule ClawCode.TUITest do
   end
 
   test "next and prev commands move the selected session" do
+    sessions = [
+      %{"id" => "session-a", "messages" => [], "tool_receipts" => []},
+      %{"id" => "session-b", "messages" => [], "tool_receipts" => []},
+      %{"id" => "session-c", "messages" => [], "tool_receipts" => []}
+    ]
+
     state = %State{
       opts: [],
       daemon_status: %{"status" => "running"},
@@ -153,11 +180,10 @@ defmodule ClawCode.TUITest do
         base_url: %{value: nil},
         tool_policy: :auto
       },
-      sessions: [
-        %{"id" => "session-a", "messages" => [], "tool_receipts" => []},
-        %{"id" => "session-b", "messages" => [], "tool_receipts" => []},
-        %{"id" => "session-c", "messages" => [], "tool_receipts" => []}
-      ],
+      all_sessions: sessions,
+      sessions: sessions,
+      session_filter: :all,
+      session_limit: 8,
       session_root: System.tmp_dir!(),
       selected_session_id: "session-b",
       selected_session: nil
@@ -168,5 +194,91 @@ defmodule ClawCode.TUITest do
 
     {:continue, prev_state} = TUI.apply_command(next_state, "prev")
     assert prev_state.selected_session_id == "session-b"
+  end
+
+  test "open aliases select latest running and failed sessions" do
+    all_sessions = [
+      %{
+        "id" => "session-latest",
+        "stop_reason" => "completed",
+        "messages" => [],
+        "tool_receipts" => []
+      },
+      %{
+        "id" => "session-running",
+        "run_state" => %{"status" => "running"},
+        "stop_reason" => nil,
+        "messages" => [],
+        "tool_receipts" => []
+      },
+      %{
+        "id" => "session-failed",
+        "stop_reason" => "provider_error",
+        "messages" => [],
+        "tool_receipts" => []
+      }
+    ]
+
+    state = %State{
+      opts: [],
+      daemon_status: %{"status" => "running"},
+      doctor: %{provider: "generic", model: %{value: "test-model"}, tool_policy: :auto},
+      all_sessions: all_sessions,
+      sessions: all_sessions,
+      session_filter: :all,
+      session_limit: 8,
+      session_root: System.tmp_dir!(),
+      selected_session_id: "session-latest",
+      selected_session: nil
+    }
+
+    {:continue, latest_state} = TUI.apply_command(state, "open latest")
+    assert latest_state.selected_session_id == "session-latest"
+
+    {:continue, running_state} = TUI.apply_command(state, "open running")
+    assert running_state.selected_session_id == "session-running"
+
+    {:continue, failed_state} = TUI.apply_command(state, "open failed")
+    assert failed_state.selected_session_id == "session-failed"
+  end
+
+  test "filter and limit commands rebuild the visible session list" do
+    root = Path.join(System.tmp_dir!(), "claw-code-tui-filter-#{SessionStore.new_id()}")
+    File.rm_rf(root)
+
+    on_exit(fn -> File.rm_rf(root) end)
+
+    SessionStore.save(%{id: "session-completed", stop_reason: "completed", messages: []},
+      root: root
+    )
+
+    SessionStore.save(
+      %{
+        id: "session-running",
+        stop_reason: nil,
+        run_state: %{"status" => "running"},
+        messages: []
+      },
+      root: root
+    )
+
+    SessionStore.save(%{id: "session-failed", stop_reason: "provider_error", messages: []},
+      root: root
+    )
+
+    state =
+      TUI.build_state(
+        [provider: "generic"],
+        %{"status" => "running", "session_root" => root},
+        nil
+      )
+
+    {:continue, filtered_state} = TUI.apply_command(state, "filter failed")
+    assert filtered_state.session_filter == :failed
+    assert Enum.all?(filtered_state.sessions, &(&1["stop_reason"] == "provider_error"))
+
+    {:continue, limited_state} = TUI.apply_command(filtered_state, "limit 2")
+    assert limited_state.session_limit == 2
+    assert length(limited_state.all_sessions) == 2
   end
 end

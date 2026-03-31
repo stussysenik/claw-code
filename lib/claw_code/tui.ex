@@ -7,7 +7,10 @@ defmodule ClawCode.TUI do
     defstruct opts: [],
               daemon_status: %{},
               doctor: %{},
+              all_sessions: [],
               sessions: [],
+              session_filter: :all,
+              session_limit: 8,
               session_root: nil,
               selected_session_id: nil,
               selected_session: nil,
@@ -22,11 +25,14 @@ defmodule ClawCode.TUI do
     end
   end
 
-  def build_state(opts, daemon_status, notice \\ nil) do
+  def build_state(opts, daemon_status, notice \\ nil, ui \\ %{}) do
     session_root =
       daemon_status["session_root"] || Keyword.get(opts, :session_root, SessionStore.root_dir())
 
-    sessions = SessionStore.list(limit: Keyword.get(opts, :limit, 8), root: session_root)
+    session_limit = Map.get(ui, :session_limit, Keyword.get(opts, :limit, 8))
+    session_filter = Map.get(ui, :session_filter, :all)
+    all_sessions = SessionStore.list(limit: session_limit, root: session_root)
+    sessions = filter_sessions(all_sessions, session_filter)
     selected_session_id = default_selected_session_id(sessions)
     selected_session = fetch_session(selected_session_id, session_root)
 
@@ -34,7 +40,10 @@ defmodule ClawCode.TUI do
       opts: opts,
       daemon_status: daemon_status,
       doctor: Manifest.doctor_payload(opts),
+      all_sessions: all_sessions,
       sessions: sessions,
+      session_filter: session_filter,
+      session_limit: session_limit,
       session_root: session_root,
       selected_session_id: selected_session_id,
       selected_session: selected_session,
@@ -67,6 +76,12 @@ defmodule ClawCode.TUI do
 
       "cancel" ->
         cancel_selected(state)
+
+      <<"filter ", filter::binary>> ->
+        set_session_filter(state, filter)
+
+      <<"limit ", limit::binary>> ->
+        set_session_limit(state, limit)
 
       "next" ->
         step_session(state, 1)
@@ -109,6 +124,7 @@ defmodule ClawCode.TUI do
       "",
       "daemon=#{state.daemon_status["status"] || "unknown"} provider=#{state.doctor[:provider] || "unknown"} model=#{nested_value(state.doctor, [:model, :value]) || "missing"} tools=#{state.doctor[:tool_policy] || :auto}",
       "base_url=#{nested_value(state.doctor, [:base_url, :value]) || "missing"} selected=#{selected_session_position(state)}",
+      "sessions=#{length(state.sessions)}/#{length(state.all_sessions)} filter=#{state.session_filter} limit=#{state.session_limit}",
       "session_root=#{state.session_root}",
       if(state.notice, do: "notice=#{state.notice}"),
       "",
@@ -119,7 +135,7 @@ defmodule ClawCode.TUI do
       render_selected_session(state.selected_session),
       "",
       "## Commands",
-      "chat <prompt> | resume <prompt> | open <n|id> | next | prev | cancel | provider <name|default> | model <name|default> | base-url <url> | clear base-url | tools auto|on|off | refresh | help | quit"
+      "chat <prompt> | resume <prompt> | open <n|id|latest|running|failed> | filter <all|running|completed|failed> | limit <n> | next | prev | cancel | provider <name|default> | model <name|default> | base-url <url> | clear base-url | tools auto|on|off | refresh | help | quit"
     ]
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join("\n")
@@ -164,7 +180,7 @@ defmodule ClawCode.TUI do
   defp refresh(%State{} = state, notice) do
     next_state =
       state.opts
-      |> build_state(refresh_daemon_status(state), notice)
+      |> build_state(refresh_daemon_status(state), notice, ui_state(state))
       |> preserve_selection(state.selected_session_id)
 
     {:continue, next_state}
@@ -173,22 +189,35 @@ defmodule ClawCode.TUI do
   defp preserve_selection(%State{} = state, nil), do: state
 
   defp preserve_selection(%State{} = state, selected_session_id) do
-    selected_session = fetch_session(selected_session_id, state.session_root)
+    resolved_session_id =
+      if Enum.any?(state.sessions, &(&1["id"] == selected_session_id)) do
+        selected_session_id
+      else
+        default_selected_session_id(state.sessions)
+      end
+
+    selected_session = fetch_session(resolved_session_id, state.session_root)
 
     %{
       state
-      | selected_session_id: selected_session_id || state.selected_session_id,
+      | selected_session_id: resolved_session_id,
         selected_session: selected_session || state.selected_session
     }
   end
 
-  defp refresh_daemon_status(%State{opts: opts}) do
+  defp refresh_daemon_status(%State{
+         opts: opts,
+         session_root: session_root,
+         daemon_status: daemon_status
+       }) do
     {:ok, status} = Daemon.status(opts)
+
     status
+    |> Map.put_new("session_root", daemon_status["session_root"] || session_root)
   end
 
   defp open_session(%State{} = state, value) do
-    case resolve_session_id(String.trim(value), state.sessions) do
+    case resolve_session_id(String.trim(value), state.sessions, state.all_sessions) do
       nil ->
         {:continue, %{state | notice: "Session not found: #{String.trim(value)}"}}
 
@@ -326,13 +355,58 @@ defmodule ClawCode.TUI do
     rebuild_with_opts(state, Keyword.delete(state.opts, :base_url), "Base URL cleared.")
   end
 
+  defp set_session_filter(%State{} = state, value) do
+    case normalize_session_filter(value) do
+      nil ->
+        {:continue, %{state | notice: "Unknown filter: #{String.trim(value)}"}}
+
+      session_filter ->
+        next_state =
+          state.opts
+          |> build_state(
+            refresh_daemon_status(state),
+            "Filter set to #{session_filter}.",
+            %{ui_state(state) | session_filter: session_filter}
+          )
+          |> preserve_selection(state.selected_session_id)
+
+        {:continue, next_state}
+    end
+  end
+
+  defp set_session_limit(%State{} = state, value) do
+    case Integer.parse(String.trim(value)) do
+      {session_limit, ""} when session_limit > 0 ->
+        next_state =
+          state.opts
+          |> build_state(
+            refresh_daemon_status(state),
+            "Session limit set to #{session_limit}.",
+            %{ui_state(state) | session_limit: session_limit}
+          )
+          |> preserve_selection(state.selected_session_id)
+
+        {:continue, next_state}
+
+      _other ->
+        {:continue, %{state | notice: "Limit must be a positive integer."}}
+    end
+  end
+
   defp rebuild_with_opts(%State{} = state, opts, notice) do
     next_state =
       opts
-      |> build_state(refresh_daemon_status(%{state | opts: opts}), notice)
+      |> build_state(refresh_daemon_status(%{state | opts: opts}), notice, ui_state(state))
       |> preserve_selection(state.selected_session_id)
 
     {:continue, next_state}
+  end
+
+  defp ui_state(%State{} = state) do
+    %{
+      session_filter: state.session_filter || :all,
+      session_limit: state.session_limit || 8
+    }
   end
 
   defp default_selected_session_id([session | _rest]), do: session["id"]
@@ -347,7 +421,25 @@ defmodule ClawCode.TUI do
     end
   end
 
-  defp resolve_session_id(value, sessions) do
+  defp resolve_session_id(value, sessions, all_sessions) do
+    normalized = String.downcase(value)
+
+    case normalized do
+      "latest" ->
+        first_session_id(all_sessions)
+
+      "running" ->
+        first_matching_session_id(all_sessions, &session_running?/1)
+
+      "failed" ->
+        first_matching_session_id(all_sessions, &session_failed?/1)
+
+      _other ->
+        resolve_index_or_id(value, sessions)
+    end
+  end
+
+  defp resolve_index_or_id(value, sessions) do
     case Integer.parse(value) do
       {index, ""} ->
         sessions
@@ -361,6 +453,23 @@ defmodule ClawCode.TUI do
         if Enum.any?(sessions, &(&1["id"] == value)), do: value, else: nil
     end
   end
+
+  defp first_session_id([session | _rest]), do: session["id"]
+  defp first_session_id([]), do: nil
+
+  defp first_matching_session_id(sessions, predicate) do
+    sessions
+    |> Enum.find(predicate)
+    |> case do
+      nil -> nil
+      session -> session["id"]
+    end
+  end
+
+  defp filter_sessions(sessions, :all), do: sessions
+  defp filter_sessions(sessions, :running), do: Enum.filter(sessions, &session_running?/1)
+  defp filter_sessions(sessions, :completed), do: Enum.filter(sessions, &session_completed?/1)
+  defp filter_sessions(sessions, :failed), do: Enum.filter(sessions, &session_failed?/1)
 
   defp render_sessions([], _selected_session_id), do: "none"
 
@@ -420,7 +529,7 @@ defmodule ClawCode.TUI do
   end
 
   defp help_text do
-    "Commands: chat <prompt>, resume <prompt>, open <n|id>, next, prev, cancel, provider <name|default>, model <name|default>, base-url <url>, clear base-url, tools auto|on|off, refresh, help, quit"
+    "Commands: chat <prompt>, resume <prompt>, open <n|id|latest|running|failed>, filter <all|running|completed|failed>, limit <n>, next, prev, cancel, provider <name|default>, model <name|default>, base-url <url>, clear base-url, tools auto|on|off, refresh, help, quit"
   end
 
   defp step_session(%State{sessions: []} = state, _offset) do
@@ -462,6 +571,29 @@ defmodule ClawCode.TUI do
   end
 
   defp nested_value(_value, _keys), do: nil
+
+  defp normalize_session_filter(value) do
+    case String.trim(String.downcase(value)) do
+      "all" -> :all
+      "running" -> :running
+      "completed" -> :completed
+      "failed" -> :failed
+      _other -> nil
+    end
+  end
+
+  defp session_running?(session) do
+    get_in(session, ["run_state", "status"]) == "running"
+  end
+
+  defp session_completed?(session) do
+    session["stop_reason"] == "completed"
+  end
+
+  defp session_failed?(session) do
+    not session_running?(session) and not session_completed?(session) and
+      not is_nil(session["stop_reason"])
+  end
 
   defp summarize(nil), do: ""
 

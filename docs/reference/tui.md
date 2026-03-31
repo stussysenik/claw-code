@@ -33,6 +33,8 @@ It stays intentionally small:
 - daemon-backed `chat` and `resume`
 - in-client `provider`, `model`, and `base-url` switching, including reset-to-default
 - `next` and `prev` session navigation
+- session filtering and list limits inside the client
+- `open latest`, `open running`, and `open failed`
 - explicit `tools auto|on|off`
 - `open`, `cancel`, `refresh`, `help`, and `quit`
 
