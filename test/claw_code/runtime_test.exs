@@ -110,6 +110,53 @@ defmodule ClawCode.RuntimeTest do
     refute Map.has_key?(session["provider"], "api_key")
   end
 
+  test "chat works with a generic openai-compatible endpoint that does not require auth" do
+    responses = [
+      %{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => "local inference reply"
+            }
+          }
+        ]
+      }
+    ]
+
+    {base_url, listener, server} =
+      start_stub_server(Enum.map(responses, &Jason.encode!/1), capture_requests: true)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    result =
+      Runtime.chat("hello from local inference",
+        provider: "generic",
+        base_url: base_url,
+        api_key: nil,
+        model: "local-model",
+        native: false
+      )
+
+    assert result.stop_reason == "completed"
+    assert result.output == "local inference reply"
+
+    assert_receive {:request, request}, 1_000
+    refute request =~ "Authorization:"
+
+    session =
+      result.session_path
+      |> Path.basename(".json")
+      |> then(&SessionStore.load(&1, root: Path.dirname(result.session_path)))
+
+    assert session["provider"]["provider"] == "generic"
+    assert session["provider"]["api_key_present"] == false
+    refute Map.has_key?(session["provider"], "api_key")
+  end
+
   test "chat rejects a concurrent run on the same session id" do
     root = Path.join(System.tmp_dir!(), "claw-code-runtime-busy-test-#{SessionStore.new_id()}")
     File.rm_rf(root)
@@ -352,21 +399,23 @@ defmodule ClawCode.RuntimeTest do
     assert result.stop_reason == "cancelled"
   end
 
-  defp start_stub_server(responses) do
+  defp start_stub_server(responses, opts \\ []) do
     {:ok, listener} =
       :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true])
 
     {:ok, port} = :inet.port(listener)
+    request_caller = self()
+    capture_requests? = Keyword.get(opts, :capture_requests, false)
 
     server =
       spawn_link(fn ->
-        serve_responses(listener, responses)
+        serve_responses(listener, responses, request_caller, capture_requests?)
       end)
 
     {"http://127.0.0.1:#{port}/v1", listener, server}
   end
 
-  defp serve_responses(listener, responses) do
+  defp serve_responses(listener, responses, request_caller, capture_requests?) do
     Enum.each(responses, fn response ->
       {body, delay_ms} =
         case response do
@@ -375,7 +424,12 @@ defmodule ClawCode.RuntimeTest do
         end
 
       {:ok, socket} = :gen_tcp.accept(listener)
-      {:ok, _request} = read_request(socket, "")
+      {:ok, request} = read_request(socket, "")
+
+      if capture_requests? do
+        send(request_caller, {:request, request})
+      end
+
       Process.sleep(delay_ms)
       :ok = :gen_tcp.send(socket, http_response(body))
       :gen_tcp.close(socket)

@@ -47,10 +47,20 @@ Custom OpenAI-compatible endpoint:
 - Provider: `generic`
 - Env vars:
 - `CLAW_BASE_URL`
-- `CLAW_API_KEY`
 - `CLAW_MODEL`
+- optional: `CLAW_API_KEY`
 - Use this for self-hosted or custom OpenAI-compatible inference endpoints, including your own GLM-serving stack.
+- If the endpoint does not require auth, omit `CLAW_API_KEY` entirely. `claw_code` will skip the `Authorization` header for `generic` when no API key is present.
 - Smoke:
+
+```bash
+CLAW_PROVIDER=generic \
+CLAW_BASE_URL="https://example.com/v1" \
+CLAW_MODEL="gpt-4.1-mini" \
+./scripts/qa.sh provider "say hello and report the configured provider"
+```
+
+Authenticated generic endpoint:
 
 ```bash
 CLAW_PROVIDER=generic \

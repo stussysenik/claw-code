@@ -2,6 +2,13 @@ defmodule ClawCode.Providers.OpenAICompatible do
   @default_connect_timeout_ms 5_000
   @default_request_timeout_ms 30_000
   @providers ~w(generic glm nim kimi)
+  @provider_aliases %{
+    "bigmodel" => "glm",
+    "moonshot" => "kimi",
+    "nvidia" => "nim",
+    "custom" => "generic",
+    "local" => "generic"
+  }
 
   defstruct [:provider, :base_url, :api_key, :model]
 
@@ -28,12 +35,22 @@ defmodule ClawCode.Providers.OpenAICompatible do
   end
 
   def configured?(%__MODULE__{} = config) do
-    present?(config.base_url) and present?(config.api_key) and present?(config.model)
+    Enum.all?(required_fields(config.provider), fn field ->
+      value =
+        case field do
+          :base_url -> config.base_url
+          :api_key -> config.api_key
+          :model -> config.model
+        end
+
+      present?(value)
+    end)
   end
 
   def diagnostics(opts \\ []) do
     config = resolve_config(opts)
     required = required_env_vars(config.provider)
+    required_fields = required_fields(config.provider)
 
     field_diagnostics = %{
       base_url:
@@ -50,7 +67,7 @@ defmodule ClawCode.Providers.OpenAICompatible do
       missing_fields:
         field_diagnostics
         |> Enum.flat_map(fn {field, diagnostic} ->
-          if diagnostic.value_present?, do: [], else: [field]
+          if field in required_fields and not diagnostic.value_present?, do: [field], else: []
         end)
     }
   end
@@ -74,10 +91,9 @@ defmodule ClawCode.Providers.OpenAICompatible do
     url = request_url(config.base_url)
     body = Jason.encode!(payload)
 
-    headers = [
-      {~c"content-type", ~c"application/json"},
-      {~c"authorization", String.to_charlist("Bearer " <> config.api_key)}
-    ]
+    headers =
+      [{~c"content-type", ~c"application/json"}]
+      |> maybe_put_bearer_header(config.api_key)
 
     case :httpc.request(
            :post,
@@ -123,6 +139,14 @@ defmodule ClawCode.Providers.OpenAICompatible do
     }
   end
 
+  def required_env_vars("generic") do
+    %{
+      base_url: ["CLAW_BASE_URL"],
+      api_key: [],
+      model: ["CLAW_MODEL"]
+    }
+  end
+
   def required_env_vars(_provider) do
     %{
       base_url: ["CLAW_BASE_URL"],
@@ -130,6 +154,9 @@ defmodule ClawCode.Providers.OpenAICompatible do
       model: ["CLAW_MODEL"]
     }
   end
+
+  def required_fields("generic"), do: [:base_url, :model]
+  def required_fields(_provider), do: [:base_url, :api_key, :model]
 
   def default_base_url("glm"), do: "https://open.bigmodel.cn/api/coding/paas/v4"
   def default_base_url("nim"), do: "https://integrate.api.nvidia.com/v1"
@@ -211,6 +238,7 @@ defmodule ClawCode.Providers.OpenAICompatible do
     provider
     |> String.trim()
     |> String.downcase()
+    |> then(&Map.get(@provider_aliases, &1, &1))
   end
 
   defp field_diagnostic(value, candidates, default_value) do
@@ -221,6 +249,7 @@ defmodule ClawCode.Providers.OpenAICompatible do
         env_source -> "env:#{env_source}"
         present?(value) and present?(default_value) and value == default_value -> "default"
         present?(value) -> "explicit"
+        candidates == [] -> "optional"
         true -> "missing"
       end
 
@@ -245,6 +274,12 @@ defmodule ClawCode.Providers.OpenAICompatible do
         end
     end
   end
+
+  defp maybe_put_bearer_header(headers, api_key) when is_binary(api_key) and api_key != "" do
+    headers ++ [{~c"authorization", String.to_charlist("Bearer " <> api_key)}]
+  end
+
+  defp maybe_put_bearer_header(headers, _api_key), do: headers
 
   defp maybe_put(map, _key, _value, false), do: map
   defp maybe_put(map, key, value, true), do: Map.put(map, key, value)

@@ -437,11 +437,18 @@ defmodule ClawCode.Runtime do
 
   defp missing_provider_message(config) do
     envs = OpenAICompatible.required_env_vars(config.provider)
+    required_fields = OpenAICompatible.required_fields(config.provider)
+
+    hints =
+      [
+        if(:base_url in required_fields, do: "base_url from #{Enum.join(envs.base_url, "/")}"),
+        if(:api_key in required_fields, do: "api_key from #{Enum.join(envs.api_key, "/")}"),
+        if(:model in required_fields, do: "model from #{Enum.join(envs.model, "/")}")
+      ]
+      |> Enum.reject(&is_nil/1)
 
     "Missing provider configuration for #{config.provider}. " <>
-      "Set base_url from #{Enum.join(envs.base_url, "/")}, " <>
-      "api_key from #{Enum.join(envs.api_key, "/")}, " <>
-      "and model from #{Enum.join(envs.model, "/")}."
+      "Set #{render_hints(hints)}."
   end
 
   defp normalize_tool_receipt(receipt, id, name, arguments, turn) do
@@ -467,6 +474,14 @@ defmodule ClawCode.Runtime do
       nil -> []
       root -> [root: root]
     end
+  end
+
+  defp render_hints([hint]), do: hint
+  defp render_hints([left, right]), do: left <> " and " <> right
+
+  defp render_hints(hints) do
+    {head, [last]} = Enum.split(hints, length(hints) - 1)
+    Enum.join(head, ", ") <> ", and " <> last
   end
 
   defp maybe_put(map, _key, _value, false), do: map

@@ -75,6 +75,29 @@ defmodule ClawCode.ProviderTest do
     )
   end
 
+  test "generic config allows unauthenticated openai compatible inference" do
+    with_env(
+      %{
+        "CLAW_BASE_URL" => "http://127.0.0.1:4000/v1",
+        "CLAW_API_KEY" => nil,
+        "CLAW_MODEL" => "local-model"
+      },
+      fn ->
+        config = OpenAICompatible.resolve_config(provider: "local")
+        diagnostics = OpenAICompatible.diagnostics(provider: "generic")
+
+        assert config.provider == "generic"
+        assert config.base_url == "http://127.0.0.1:4000/v1"
+        assert config.model == "local-model"
+        assert config.api_key == nil
+        assert OpenAICompatible.configured?(config)
+        assert diagnostics.configured == true
+        assert diagnostics.fields.api_key.source == "optional"
+        refute :api_key in diagnostics.missing_fields
+      end
+    )
+  end
+
   test "provider diagnostics show defaulted and missing fields without leaking keys" do
     with_env(
       %{
