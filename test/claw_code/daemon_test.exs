@@ -163,6 +163,104 @@ defmodule ClawCode.DaemonTest do
     assert result.stop_reason == "cancelled"
   end
 
+  test "chat resumes an existing session through the daemon" do
+    daemon_root = tmp_path("daemon-resume")
+    session_root = tmp_path("daemon-resume-sessions")
+
+    File.rm_rf(daemon_root)
+    File.rm_rf(session_root)
+
+    {base_url, listener, server} =
+      start_stub_server([
+        Jason.encode!(%{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "first reply"}}]
+        }),
+        Jason.encode!(%{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "second reply"}}]
+        })
+      ])
+
+    task = start_daemon(daemon_root, session_root: session_root)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+      _ = Daemon.stop(daemon_root: daemon_root)
+      if Process.alive?(task.pid), do: Process.exit(task.pid, :kill)
+    end)
+
+    session_id = "daemon-resume-session"
+
+    assert {:ok, %Runtime.Result{} = first} =
+             Daemon.chat("first prompt",
+               daemon_root: daemon_root,
+               session_root: session_root,
+               provider: "generic",
+               base_url: base_url,
+               api_key: "test-key",
+               model: "test-model",
+               session_id: session_id,
+               native: false
+             )
+
+    assert {:ok, %Runtime.Result{} = second} =
+             Daemon.chat("second prompt",
+               daemon_root: daemon_root,
+               session_root: session_root,
+               provider: "generic",
+               base_url: base_url,
+               api_key: "test-key",
+               model: "test-model",
+               session_id: session_id,
+               native: false
+             )
+
+    assert first.session_id == session_id
+    assert second.session_id == session_id
+    assert first.session_path == second.session_path
+
+    session = SessionStore.load(session_id, root: session_root)
+    assert second.turns == 2
+    assert length(session["messages"]) == 5
+    assert Enum.at(session["messages"], 3)["content"] == "second prompt"
+    assert List.last(session["messages"])["content"] == "second reply"
+  end
+
+  test "serve replaces stale daemon metadata with a live daemon" do
+    daemon_root = tmp_path("daemon-stale")
+    session_root = tmp_path("daemon-stale-sessions")
+
+    File.rm_rf(daemon_root)
+    File.rm_rf(session_root)
+    File.mkdir_p!(daemon_root)
+
+    File.write!(
+      Path.join(daemon_root, "daemon.json"),
+      Jason.encode_to_iodata!(%{
+        "host" => "127.0.0.1",
+        "port" => 65_000,
+        "token" => "stale-token",
+        "pid" => "99999",
+        "version" => "0.1.0",
+        "started_at" => "2026-03-31T00:00:00Z",
+        "session_root" => session_root
+      })
+    )
+
+    assert {:ok, %{"status" => "stale"}} = Daemon.status(daemon_root: daemon_root)
+
+    task = start_daemon(daemon_root, session_root: session_root)
+
+    on_exit(fn ->
+      _ = Daemon.stop(daemon_root: daemon_root)
+      if Process.alive?(task.pid), do: Process.exit(task.pid, :kill)
+    end)
+
+    assert {:ok, %{"status" => "running"} = status} = Daemon.status(daemon_root: daemon_root)
+    assert status["session_root"] == session_root
+    refute status["token"] == "stale-token"
+  end
+
   defp start_daemon(daemon_root, opts) do
     task =
       Task.async(fn ->
