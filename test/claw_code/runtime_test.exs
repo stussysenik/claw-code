@@ -111,11 +111,8 @@ defmodule ClawCode.RuntimeTest do
   end
 
   test "chat rejects a concurrent run on the same session id" do
-    root =
-      Path.join(
-        System.tmp_dir!(),
-        "claw-code-runtime-busy-test-#{System.unique_integer([:positive])}"
-      )
+    root = Path.join(System.tmp_dir!(), "claw-code-runtime-busy-test-#{SessionStore.new_id()}")
+    File.rm_rf(root)
 
     responses = [
       {Jason.encode!(%{
@@ -172,10 +169,9 @@ defmodule ClawCode.RuntimeTest do
 
   test "chat checkpoints tool receipts before the final provider reply" do
     root =
-      Path.join(
-        System.tmp_dir!(),
-        "claw-code-runtime-checkpoint-test-#{System.unique_integer([:positive])}"
-      )
+      Path.join(System.tmp_dir!(), "claw-code-runtime-checkpoint-test-#{SessionStore.new_id()}")
+
+    File.rm_rf(root)
 
     session_id = "checkpoint-session"
 
@@ -310,11 +306,9 @@ defmodule ClawCode.RuntimeTest do
   end
 
   test "chat can be cancelled through the runtime api" do
-    root =
-      Path.join(
-        System.tmp_dir!(),
-        "claw-code-runtime-cancel-test-#{System.unique_integer([:positive])}"
-      )
+    root = Path.join(System.tmp_dir!(), "claw-code-runtime-cancel-test-#{SessionStore.new_id()}")
+
+    File.rm_rf(root)
 
     session_id = "cancel-session"
 

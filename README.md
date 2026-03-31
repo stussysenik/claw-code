@@ -90,7 +90,7 @@ Sessions live under `.claw/sessions/` and can be resumed by explicit id.
 ./claw_code load-session my-session --show-messages --show-receipts
 ```
 
-`load-session` exposes `created=` and `updated=` timestamps together with message and receipt counts. `sessions` gives a fast index of recent session ids, run states, stop reasons, and receipt counts, and `cancel-session` lets you terminate a hung run without losing the persisted session state.
+`load-session` exposes `created=` and `updated=` timestamps together with message and receipt counts. `sessions` gives a fast index of recent session ids, run states, stop reasons, and receipt counts, and `cancel-session` lets you terminate a hung run without losing the persisted session state. The runtime now only allows one active run per session id inside the same BEAM, and intermediate tool receipts/messages are checkpointed into the saved session before the final provider reply lands.
 
 ## Provider Setup
 

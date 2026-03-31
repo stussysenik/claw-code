@@ -4,11 +4,8 @@ defmodule ClawCode.SessionServerTest do
   alias ClawCode.{SessionServer, SessionStore}
 
   test "session server persists and snapshots a session" do
-    root =
-      Path.join(
-        System.tmp_dir!(),
-        "claw-code-session-server-test-#{System.unique_integer([:positive])}"
-      )
+    root = Path.join(System.tmp_dir!(), "claw-code-session-server-test-#{SessionStore.new_id()}")
+    File.rm_rf(root)
 
     {:ok, session_id, pid} = SessionServer.ensure_started("session-server", root: root)
 
@@ -56,10 +53,9 @@ defmodule ClawCode.SessionServerTest do
 
   test "session server enforces a single active run and can cancel it" do
     root =
-      Path.join(
-        System.tmp_dir!(),
-        "claw-code-session-server-run-test-#{System.unique_integer([:positive])}"
-      )
+      Path.join(System.tmp_dir!(), "claw-code-session-server-run-test-#{SessionStore.new_id()}")
+
+    File.rm_rf(root)
 
     {:ok, session_id, pid} = SessionServer.ensure_started("session-runner", root: root)
 
