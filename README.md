@@ -7,6 +7,7 @@
 - [What Lives Here](#what-lives-here)
 - [Canonical Operator Layer](#canonical-operator-layer)
 - [Working Commands](#working-commands)
+- [Session Resume](#session-resume)
 - [Provider Setup](#provider-setup)
 - [Release Automation](#release-automation)
 - [Repository Layout](#repository-layout)
@@ -76,6 +77,18 @@ mix escript.build
 ./claw_code chat --allow-shell --allow-write "inspect the repo and propose a minimal plan"
 ```
 
+## Session Resume
+
+Sessions live under `.claw/sessions/` and can be resumed by explicit id.
+
+```bash
+./claw_code chat --session-id my-session --provider kimi "inspect this repo"
+./claw_code resume-session my-session --provider kimi "continue from the last state"
+./claw_code load-session my-session
+```
+
+`load-session` now exposes `created=` and `updated=` timestamps together with message and receipt counts.
+
 ## Provider Setup
 
 Provider contracts are documented in [docs/providers.md](./docs/providers.md). `claw_code` does not need to read secret files; pass provider credentials through environment variables or explicit CLI flags.
@@ -101,6 +114,7 @@ The release lane generates tags, updates `CHANGELOG.md`, and publishes GitHub Re
 - `docs/providers.md` records the provider env contract for `generic`, `glm`, `kimi`, and `nim`.
 - `.omx/` contains the operator board, team split, checklists, and mission briefs.
 - `scripts/` contains the canonical Ralph loops, QA dispatcher, and validation gate.
+- `.claw/sessions/` stores resumable session state with message history and tool receipts.
 - `progress.md` is the append-only UTC ledger for workflow progress.
 
 ## Progress Ledger

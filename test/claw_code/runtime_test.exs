@@ -105,6 +105,69 @@ defmodule ClawCode.RuntimeTest do
     assert hd(session["tool_receipts"])["tool_name"] == "shell"
   end
 
+  test "chat resumes an existing session when session_id is provided" do
+    responses = [
+      %{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => "first response"
+            }
+          }
+        ]
+      },
+      %{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => "second response"
+            }
+          }
+        ]
+      }
+    ]
+
+    {base_url, listener, server} = start_stub_server(Enum.map(responses, &Jason.encode!/1))
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    first =
+      Runtime.chat("first prompt",
+        provider: "generic",
+        base_url: base_url,
+        api_key: "test-key",
+        model: "test-model",
+        native: false
+      )
+
+    second =
+      Runtime.chat("second prompt",
+        provider: "generic",
+        base_url: base_url,
+        api_key: "test-key",
+        model: "test-model",
+        session_id: first.session_id,
+        native: false
+      )
+
+    assert first.session_id == second.session_id
+    assert first.session_path == second.session_path
+
+    session =
+      second.session_id
+      |> SessionStore.load(root: Path.dirname(second.session_path))
+
+    assert second.turns == 2
+    assert length(session["messages"]) == 5
+    assert Enum.at(session["messages"], 3)["content"] == "second prompt"
+    assert List.last(session["messages"])["content"] == "second response"
+  end
+
   defp start_stub_server(bodies) do
     {:ok, listener} =
       :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true])

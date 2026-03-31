@@ -1,8 +1,8 @@
 defmodule ClawCode.CLITest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
   import ExUnit.CaptureIO
 
-  alias ClawCode.CLI
+  alias ClawCode.{CLI, SessionStore}
 
   test "summary command renders app summary" do
     output = capture_io(fn -> assert CLI.run(["summary"]) == 0 end)
@@ -43,5 +43,40 @@ defmodule ClawCode.CLITest do
 
     assert show_output =~ "review"
     assert exec_output =~ "Mirrored tool 'MCPTool'"
+  end
+
+  test "resume-session reuses an existing session id" do
+    root = Path.join(System.tmp_dir!(), "claw-code-cli-resume-session-test")
+    previous_root = Application.get_env(:claw_code, :session_root)
+
+    on_exit(fn ->
+      if is_nil(previous_root) do
+        Application.delete_env(:claw_code, :session_root)
+      else
+        Application.put_env(:claw_code, :session_root, previous_root)
+      end
+    end)
+
+    Application.put_env(:claw_code, :session_root, root)
+
+    path =
+      SessionStore.save(
+        %{
+          prompt: "hello",
+          output: "world",
+          stop_reason: "completed",
+          messages: [%{"role" => "system", "content" => "seed"}]
+        },
+        root: root
+      )
+
+    session_id = Path.basename(path, ".json")
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["resume-session", session_id, "--provider", "generic", "resume me"]) == 0
+      end)
+
+    assert output =~ "Session id: #{session_id}"
   end
 end

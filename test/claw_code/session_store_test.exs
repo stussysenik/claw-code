@@ -32,4 +32,18 @@ defmodule ClawCode.SessionStoreTest do
 
     assert session["requirements"] == SessionStore.requirements_ledger()
   end
+
+  test "fetch returns :error for a missing session" do
+    root = Path.join(System.tmp_dir!(), "claw-code-session-store-missing-test")
+    assert SessionStore.fetch("missing-session", root: root) == :error
+  end
+
+  test "document preserves created_at and emits updated_at" do
+    document =
+      SessionStore.document(%{"id" => "session-1", "created_at" => "2026-03-31T00:00:00Z"})
+
+    assert document["created_at"] == "2026-03-31T00:00:00Z"
+    assert document["updated_at"]
+    assert document["turns"] == 0
+  end
 end

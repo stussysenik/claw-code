@@ -10,6 +10,7 @@ defmodule ClawCode.CLI do
     model: :string,
     base_url: :string,
     api_key: :string,
+    session_id: :string,
     max_turns: :integer,
     allow_shell: :boolean,
     allow_write: :boolean,
@@ -97,6 +98,18 @@ defmodule ClawCode.CLI do
         IO.puts(render_chat_result(result))
         0
 
+      ["resume-session", session_id | rest] ->
+        {opts, args, _invalid} = OptionParser.parse(rest, strict: @switches)
+
+        opts =
+          opts
+          |> Keyword.put(:session_id, session_id)
+          |> normalize_opts()
+
+        result = Runtime.chat(join_args(args), opts)
+        IO.puts(render_chat_result(result))
+        0
+
       ["symphony" | rest] ->
         {opts, args, _invalid} = OptionParser.parse(rest, strict: @switches)
         opts = normalize_opts(opts)
@@ -170,7 +183,7 @@ defmodule ClawCode.CLI do
         messages = session["messages"] || []
 
         IO.puts(
-          "#{session["id"]}\n#{length(messages)} messages\nrequirements=#{length(requirements)}\ntool_receipts=#{length(tool_receipts)}\nstop=#{session["stop_reason"]}"
+          "#{session["id"]}\ncreated=#{session["created_at"] || session["saved_at"]}\nupdated=#{session["updated_at"] || session["saved_at"]}\n#{length(messages)} messages\nrequirements=#{length(requirements)}\ntool_receipts=#{length(tool_receipts)}\nstop=#{session["stop_reason"]}"
         )
 
         0
@@ -197,6 +210,7 @@ defmodule ClawCode.CLI do
       "Provider: #{result.provider}",
       "Turns: #{result.turns}",
       "Stop reason: #{result.stop_reason}",
+      "Session id: #{result.session_id}",
       "Session path: #{result.session_path}",
       "Tool receipts: #{length(result.tool_receipts)}",
       "",
@@ -238,7 +252,8 @@ defmodule ClawCode.CLI do
       tools [--limit N] [--query TEXT] [--deny-tool NAME] [--deny-prefix PREFIX]
       route <prompt> [--limit N] [--native|--no-native]
       bootstrap <prompt> [--limit N] [--native|--no-native]
-      chat <prompt> [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--max-turns N] [--allow-shell] [--allow-write] [--native|--no-native]
+      chat <prompt> [--session-id ID] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--max-turns N] [--allow-shell] [--allow-write] [--native|--no-native]
+      resume-session <session_id> <prompt> [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--max-turns N] [--allow-shell] [--allow-write] [--native|--no-native]
       symphony <prompt> [--limit N] [--native|--no-native]
       turn-loop <prompt> ...
       show-command <name>

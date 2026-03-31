@@ -1,5 +1,5 @@
 defmodule ClawCode.Runtime do
-  alias ClawCode.{Router, SessionStore}
+  alias ClawCode.{Router, SessionServer, SessionStore}
   alias ClawCode.Providers.OpenAICompatible
   alias ClawCode.Tools.Builtin
 
@@ -10,6 +10,7 @@ defmodule ClawCode.Runtime do
       :output,
       :stop_reason,
       :session_path,
+      :session_id,
       :turns,
       :provider,
       :requirements,
@@ -45,50 +46,69 @@ defmodule ClawCode.Runtime do
     config = OpenAICompatible.resolve_config(opts)
     matches = Router.route(prompt, route_opts(opts))
 
+    {:ok, session_id, session_pid} =
+      SessionServer.ensure_started(opts[:session_id], session_server_opts(opts))
+
+    session = SessionServer.snapshot(session_pid)
+    messages = seed_messages(prompt, matches, session["messages"] || [])
+    existing_receipts = session["tool_receipts"] || []
+    existing_turns = session["turns"] || 0
+
     if OpenAICompatible.configured?(config) do
       tool_specs = Builtin.specs(opts)
-      messages = seed_messages(prompt, matches)
 
-      case loop(messages, config, tool_specs, opts, 1, Keyword.get(opts, :max_turns, 6)) do
+      case loop(
+             messages,
+             config,
+             tool_specs,
+             opts,
+             1,
+             Keyword.get(opts, :max_turns, 6),
+             existing_receipts
+           ) do
         {:ok, final_messages, output, stop_reason, turns, receipts} ->
           persist_result(
+            session_pid,
             prompt,
             output,
             stop_reason,
-            turns,
+            existing_turns + turns,
             config,
             matches,
             final_messages,
-            receipts
+            receipts,
+            session_id
           )
 
         {:error, message, final_messages, receipts} ->
           persist_result(
+            session_pid,
             prompt,
             message,
             "provider_error",
-            0,
+            existing_turns,
             config,
             matches,
             final_messages,
-            receipts
+            receipts,
+            session_id
           )
       end
     else
       persist_result(
+        session_pid,
         prompt,
         missing_provider_message(config),
         "missing_provider_config",
-        0,
+        existing_turns,
         config,
         matches,
-        seed_messages(prompt, matches),
-        []
+        messages,
+        existing_receipts,
+        session_id
       )
     end
   end
-
-  defp loop(messages, _config, _tools, _opts, turn, max_turns, receipts \\ [])
 
   defp loop(messages, _config, _tools, _opts, turn, max_turns, receipts) when turn > max_turns do
     {:ok, messages, "Tool loop limit reached.", "max_turns_reached", max_turns, receipts}
@@ -161,6 +181,7 @@ defmodule ClawCode.Runtime do
   end
 
   defp persist_result(
+         session_pid,
          prompt,
          output,
          stop_reason,
@@ -168,11 +189,13 @@ defmodule ClawCode.Runtime do
          config,
          matches,
          messages,
-         tool_receipts
+         tool_receipts,
+         session_id
        ) do
     requirements = SessionStore.requirements_ledger()
 
     payload = %{
+      id: session_id,
       prompt: prompt,
       output: output,
       stop_reason: stop_reason,
@@ -184,13 +207,14 @@ defmodule ClawCode.Runtime do
       requirements: requirements
     }
 
-    path = SessionStore.save(payload)
+    {path, document} = SessionServer.persist(session_pid, payload)
 
     %Result{
       prompt: prompt,
       output: output,
       stop_reason: stop_reason,
       session_path: path,
+      session_id: document["id"],
       turns: turns,
       provider: config.provider,
       requirements: requirements,
@@ -202,11 +226,17 @@ defmodule ClawCode.Runtime do
     }
   end
 
-  defp seed_messages(prompt, matches) do
-    [
-      %{"role" => "system", "content" => system_prompt(matches)},
-      %{"role" => "user", "content" => prompt}
-    ]
+  defp seed_messages(prompt, matches, existing_messages) do
+    case existing_messages do
+      [] ->
+        [
+          %{"role" => "system", "content" => system_prompt(matches)},
+          %{"role" => "user", "content" => prompt}
+        ]
+
+      messages ->
+        messages ++ [%{"role" => "user", "content" => prompt}]
+    end
   end
 
   defp system_prompt(matches) do
@@ -280,6 +310,13 @@ defmodule ClawCode.Runtime do
       tool_name: name,
       argument_keys: arguments |> Map.keys() |> Enum.sort()
     })
+  end
+
+  defp session_server_opts(opts) do
+    case Keyword.get(opts, :session_root) do
+      nil -> []
+      root -> [root: root]
+    end
   end
 
   defp maybe_put(map, _key, _value, false), do: map

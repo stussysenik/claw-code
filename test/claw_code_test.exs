@@ -87,6 +87,8 @@ defmodule ClawCodeTest do
         assert 0 == CLI.run(["load-session", session_id])
       end)
 
+    assert output =~ "created="
+    assert output =~ "updated="
     assert output =~ "requirements=#{length(SessionStore.requirements_ledger())}"
     assert output =~ "tool_receipts=0"
   end
