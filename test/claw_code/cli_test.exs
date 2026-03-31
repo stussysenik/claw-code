@@ -184,7 +184,9 @@ defmodule ClawCode.CLITest do
   end
 
   test "cancel-session stops an active run" do
-    root = Path.join(System.tmp_dir!(), "claw-code-cli-cancel-session-test")
+    root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-cancel-session-test-#{SessionStore.new_id()}")
+
     previous_root = Application.get_env(:claw_code, :session_root)
 
     on_exit(fn ->
@@ -196,6 +198,7 @@ defmodule ClawCode.CLITest do
     end)
 
     Application.put_env(:claw_code, :session_root, root)
+    File.rm_rf(root)
 
     {base_url, listener, server} =
       start_stub_server([
@@ -243,14 +246,19 @@ defmodule ClawCode.CLITest do
         assert CLI.run(["cancel-session", session_id]) == 0
       end)
 
-    assert output =~ "Cancelled session: #{session_id}"
+    assert output =~ "Cancelled session in this runtime: #{session_id}"
 
     result = Task.await(task, 2_000)
     assert result.stop_reason == "cancelled"
   end
 
   test "cancel-session returns 1 when a session is not active" do
-    root = Path.join(System.tmp_dir!(), "claw-code-cli-cancel-not-running-test")
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "claw-code-cli-cancel-not-running-test-#{SessionStore.new_id()}"
+      )
+
     previous_root = Application.get_env(:claw_code, :session_root)
 
     on_exit(fn ->
@@ -262,6 +270,7 @@ defmodule ClawCode.CLITest do
     end)
 
     Application.put_env(:claw_code, :session_root, root)
+    File.rm_rf(root)
 
     SessionStore.save(%{id: "not-running", prompt: "hello", output: "world", messages: []},
       root: root
@@ -272,7 +281,7 @@ defmodule ClawCode.CLITest do
         assert CLI.run(["cancel-session", "not-running"]) == 1
       end)
 
-    assert output =~ "Session is not running: not-running"
+    assert output =~ "Session is not running in this runtime: not-running"
   end
 
   test "load-session returns 1 for a missing session" do

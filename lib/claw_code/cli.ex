@@ -137,7 +137,7 @@ defmodule ClawCode.CLI do
       ["cancel-session", session_id | rest] ->
         with {:ok, opts, _args} <- parse_opts(rest),
              {:ok, _cancelled} <- normalize_cancel(Runtime.cancel(session_id, opts)) do
-          IO.puts("Cancelled session: #{session_id}")
+          IO.puts("Cancelled session in this runtime: #{session_id}")
           0
         else
           {:error, :not_found} ->
@@ -145,7 +145,7 @@ defmodule ClawCode.CLI do
             1
 
           {:error, :not_running} ->
-            IO.puts("Session is not running: #{session_id}")
+            IO.puts("Session is not running in this runtime: #{session_id}")
             1
 
           {:error, message} when is_binary(message) ->
@@ -468,7 +468,7 @@ defmodule ClawCode.CLI do
       bootstrap <prompt> [--limit N] [--native|--no-native]
       chat <prompt> [--session-id ID] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--max-turns N] [--allow-shell] [--allow-write] [--native|--no-native]
       resume-session <session_id> <prompt> [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--max-turns N] [--allow-shell] [--allow-write] [--native|--no-native]
-      cancel-session <session_id>
+      cancel-session <session_id> [same runtime only]
       symphony <prompt> [--limit N] [--native|--no-native]
       turn-loop <prompt> ...
       show-command <name>
