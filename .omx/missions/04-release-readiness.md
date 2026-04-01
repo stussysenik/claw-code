@@ -12,6 +12,7 @@ Keep the repo teachable and shippable: clean operator docs, explicit standards, 
 ## Scope
 
 - Review and release checklists
+- Daily-driver beta checklist and smoke matrix
 - Evidence requirements
 - Docs accuracy for operator commands and repo layout
 - Research writeups that do not bloat the runtime surface

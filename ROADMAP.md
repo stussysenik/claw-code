@@ -27,7 +27,7 @@ What is already strong:
 What still blocks daily-driver use:
 
 - Phase 2 still needs the remaining live smoke evidence for Kimi and one generic OpenAI-compatible endpoint. GLM and NIM are already proven, the current live vision-capable GLM path in this repo is `GLM-4.6V`, and the split path `GLM-5.1` reasoning plus `GLM-4.6V` vision has now also been proven through `chat` and the TUI.
-- Phase 6 still needs a real daily-driver beta checklist, live smoke matrix, and release decision record.
+- Phase 6 still needs the final release-candidate decision record, and release-config changes still require explicit `npm run release:dry-run` evidence.
 
 That means the right claim today is: promising daily-driver candidate, not main-tool ready.
 
@@ -155,7 +155,8 @@ These are valuable, but they should not delay the daily-driver bar.
 
 1. Capture live provider evidence for GLM, Kimi, NIM, and one generic endpoint.
 2. Prove the split-backbone path against a real preferred provider combination, then close the remaining Kimi and generic evidence gaps.
-3. Write the Phase 6 beta checklist and smoke matrix.
+3. Record the first release-candidate decision with current evidence links.
+4. Keep `npm run release:dry-run` evidence attached to any future release-config change.
 
 ### P1: Daily-Driver Beta
 

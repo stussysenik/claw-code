@@ -63,10 +63,10 @@
 
 ## Phase 6: Release Confidence
 
-- [ ] Build a daily-driver release checklist that combines core, provider, daemon, native, and TUI evidence.
-- [ ] Add a small live smoke matrix document with expected commands and outputs.
+- [x] Build a daily-driver release checklist that combines core, provider, daemon, native, and TUI evidence.
+- [x] Add a small live smoke matrix document with expected commands and outputs.
 - [ ] Run `npm run release:dry-run` as part of the release-quality path after any release-config change.
-- [ ] Define the first "daily-driver beta" bar in docs, not just in chat.
+- [x] Define the first "daily-driver beta" bar in docs, not just in chat.
 - [ ] Record the release candidate decision in `progress.md` with evidence links.
 
 ## Phase 7: Post-RC Research Track

@@ -54,6 +54,7 @@ The preserved operator workflows from the archived workspace are documented in [
 - [.omx/team.md](./.omx/team.md)
 - [docs/backlog.md](./docs/backlog.md)
 - [docs/reference/architecture.md](./docs/reference/architecture.md)
+- [docs/reference/release-confidence.md](./docs/reference/release-confidence.md)
 - [docs/reference/recovery.md](./docs/reference/recovery.md)
 - [docs/execution-plan.md](./docs/execution-plan.md)
 - [docs/engineering-standards.md](./docs/engineering-standards.md)
@@ -216,6 +217,8 @@ Core operator commands now also support `--json`, which is the intended first co
 ## Release Automation
 
 Release automation is driven by semantic-release from conventional commits on `main`.
+
+The daily-driver beta checklist and live smoke matrix now live in [docs/reference/release-confidence.md](./docs/reference/release-confidence.md).
 
 Local verification:
 

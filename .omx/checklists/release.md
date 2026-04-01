@@ -7,6 +7,8 @@
 
 ## Checklist
 
+Use [docs/reference/release-confidence.md](../../docs/reference/release-confidence.md) as the canonical daily-driver beta checklist and live smoke matrix. This file stays as the short preflight version.
+
 1. `mix format --check-formatted`
 2. `mix test`
 3. `mix escript.build`
