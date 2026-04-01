@@ -39,6 +39,12 @@ Initial implementation status:
 
 Remaining work stays in hardening rather than architecture: richer replay/inspection semantics, background-loop evidence, and more stale-daemon recovery coverage.
 
+Recent hardening status:
+
+- daemon-backed sessions are now covered across full stop/start restart continuity
+- daemon shutdown now fails closed when the process does not actually stop in time
+- recovered sessions that were previously persisted as `run=running` are reconciled to `run_interrupted`
+
 ## Phase Plan
 
 ### Phase 0: Contract

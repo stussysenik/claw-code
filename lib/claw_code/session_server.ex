@@ -42,7 +42,7 @@ defmodule ClawCode.SessionServer do
 
     document =
       case SessionStore.fetch(session_id, root: root) do
-        {:ok, session} -> session
+        {:ok, session} -> reconcile_loaded_session(session, root)
         :error -> SessionStore.document(%{id: session_id})
       end
 
@@ -181,6 +181,22 @@ defmodule ClawCode.SessionServer do
 
     {path, document} = SessionStore.write(document, root: state.root)
     {path, document, %{state | document: document}}
+  end
+
+  defp reconcile_loaded_session(session, root) do
+    if get_in(session, ["run_state", "status"]) == "running" do
+      document =
+        session
+        |> Map.put("stop_reason", "run_interrupted")
+        |> Map.put_new("output", "Session run interrupted during recovery.")
+        |> Map.put("run_state", finished_run_state("run_interrupted"))
+        |> SessionStore.document(id: session["id"])
+
+      {_path, persisted} = SessionStore.write(document, root: root)
+      persisted
+    else
+      session
+    end
   end
 
   defp clear_active_run(%{active_run: nil} = state), do: state

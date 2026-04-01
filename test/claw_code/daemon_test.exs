@@ -226,6 +226,133 @@ defmodule ClawCode.DaemonTest do
     assert List.last(session["messages"])["content"] == "second reply"
   end
 
+  test "chat resumes an existing session after daemon restart" do
+    daemon_root = tmp_path("daemon-restart")
+    session_root = tmp_path("daemon-restart-sessions")
+
+    File.rm_rf(daemon_root)
+    File.rm_rf(session_root)
+
+    {base_url, listener, server} =
+      start_stub_server([
+        Jason.encode!(%{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "first reply"}}]
+        }),
+        Jason.encode!(%{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "second reply"}}]
+        })
+      ])
+
+    task = start_daemon(daemon_root, session_root: session_root)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+      _ = Daemon.stop(daemon_root: daemon_root)
+      if Process.alive?(task.pid), do: Process.exit(task.pid, :kill)
+      File.rm_rf(daemon_root)
+      File.rm_rf(session_root)
+    end)
+
+    session_id = "daemon-restart-session"
+
+    assert {:ok, %Runtime.Result{} = first} =
+             Daemon.chat("first prompt",
+               daemon_root: daemon_root,
+               session_root: session_root,
+               provider: "generic",
+               base_url: base_url,
+               api_key: "test-key",
+               model: "test-model",
+               session_id: session_id,
+               native: false
+             )
+
+    assert {:ok, %{"status" => "stopping"}} = Daemon.stop(daemon_root: daemon_root)
+    assert :ok = Task.await(task, 2_000)
+    assert {:ok, %{"status" => "stopped"}} = Daemon.status(daemon_root: daemon_root)
+
+    restarted = start_daemon(daemon_root, session_root: session_root)
+
+    assert {:ok, %Runtime.Result{} = second} =
+             Daemon.chat("second prompt",
+               daemon_root: daemon_root,
+               session_root: session_root,
+               provider: "generic",
+               base_url: base_url,
+               api_key: "test-key",
+               model: "test-model",
+               session_id: session_id,
+               native: false
+             )
+
+    assert first.session_id == session_id
+    assert second.session_id == session_id
+    assert first.session_path == second.session_path
+
+    session = SessionStore.load(session_id, root: session_root)
+    assert second.turns == 2
+    assert length(session["messages"]) == 5
+    assert Enum.at(session["messages"], 3)["content"] == "second prompt"
+    assert List.last(session["messages"])["content"] == "second reply"
+
+    Process.unlink(task.pid)
+    Process.unlink(restarted.pid)
+  end
+
+  test "stop returns an error when the daemon never stops" do
+    daemon_root = tmp_path("daemon-stop-timeout")
+    session_root = tmp_path("daemon-stop-timeout-sessions")
+
+    File.rm_rf(daemon_root)
+    File.mkdir_p!(daemon_root)
+
+    {:ok, listener} =
+      :gen_tcp.listen(0, [
+        :binary,
+        {:packet, 4},
+        active: false,
+        reuseaddr: true,
+        ip: {127, 0, 0, 1}
+      ])
+
+    {:ok, port} = :inet.port(listener)
+    token = "fake-daemon-token"
+
+    File.write!(
+      Path.join(daemon_root, "daemon.json"),
+      Jason.encode_to_iodata!(%{
+        "host" => "127.0.0.1",
+        "port" => port,
+        "token" => token,
+        "pid" => "fake-daemon",
+        "version" => "0.1.0",
+        "started_at" => "2026-04-01T00:00:00Z",
+        "session_root" => session_root
+      })
+    )
+
+    server =
+      spawn_link(fn ->
+        fake_daemon_loop(listener, token)
+      end)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+      File.rm_rf(daemon_root)
+    end)
+
+    assert {:ok, %{"status" => "running"}} = Daemon.status(daemon_root: daemon_root)
+
+    assert {:error, :stop_timeout} =
+             Daemon.stop(
+               daemon_root: daemon_root,
+               daemon_wait_attempts: 2,
+               daemon_poll_interval_ms: 1
+             )
+  end
+
   test "serve replaces stale daemon metadata with a live daemon" do
     daemon_root = tmp_path("daemon-stale")
     session_root = tmp_path("daemon-stale-sessions")
@@ -307,6 +434,48 @@ defmodule ClawCode.DaemonTest do
       :stop -> :ok
     after
       100 -> :ok
+    end
+  end
+
+  defp fake_daemon_loop(listener, token) do
+    receive do
+      :stop ->
+        :ok
+    after
+      0 ->
+        case :gen_tcp.accept(listener) do
+          {:ok, socket} ->
+            {:ok, payload} = :gen_tcp.recv(socket, 0, 1_000)
+            {:ok, request} = Jason.decode(payload)
+
+            response =
+              cond do
+                request["token"] != token ->
+                  %{"ok" => false, "error" => "unauthorized"}
+
+                request["method"] == "ping" ->
+                  %{
+                    "ok" => true,
+                    "result" => %{
+                      "pid" => "fake-daemon",
+                      "server_time" => "2026-04-01T00:00:00Z"
+                    }
+                  }
+
+                request["method"] == "shutdown" ->
+                  %{"ok" => true, "result" => %{"status" => "stopping"}}
+
+                true ->
+                  %{"ok" => false, "error" => "unknown_method"}
+              end
+
+            :ok = :gen_tcp.send(socket, Jason.encode!(response))
+            :gen_tcp.close(socket)
+            fake_daemon_loop(listener, token)
+
+          {:error, :closed} ->
+            :ok
+        end
     end
   end
 

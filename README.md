@@ -147,6 +147,8 @@ The inspection surface is intentionally getting denser as the repo moves toward 
 
 The design goal is not a network service or a distributed node mesh. It is a boring, inspectable local coordinator that can survive a shell exit, keep session ownership stable, and become the foundation for future multi-client control without loosening the current KISS/DRY/SRP boundaries. Use `--session-root PATH` and `--daemon-root PATH` when you want isolated operator roots for testing or parallel work.
 
+If a session was previously left in `run=running` and the daemon/runtime later recovers it cold, the recovered state is now made explicit as `run_interrupted` instead of pretending the abandoned run is still live.
+
 The final UX can absolutely include a full terminal UI, and the correct layering stays engine first: the Elixir runtime and daemon remain the product core, and the TUI is a client over that control plane instead of the architectural center.
 
 `./claw_code tui` is the first in-repo slice of that client. It is intentionally minimal: recent sessions, selected transcript, prompt/output summaries, provider/model diagnostics, tool receipts, aggregate run counts, selected-session run metadata, optional `watch` refresh cadence, `follow` targets like `running` or `latest-running`, an `active` alias plus `focus active` preset for monitoring live work, targeted `cancel active` / `cancel running` intervention, in-client provider/model/base-url switching with reset-to-default, session filtering and limits, substring `find`, transcript `find-msg` with `next-hit` / `prev-hit`, `open latest-completed`, targeted `resume latest ...`, provider `probe`, and a command loop for `chat`, `resume`, `open`, `next`, `prev`, `cancel`, and `tools`.

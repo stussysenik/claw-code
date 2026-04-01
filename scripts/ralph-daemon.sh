@@ -13,8 +13,21 @@ daemon_cycle() {
   local session_root="$tmp_root/sessions"
   local status=0
 
+  mkdir -p "$daemon_root"
+  cat >"$daemon_root/daemon.json" <<EOF
+{
+  "host": "127.0.0.1",
+  "port": 65000,
+  "token": "stale-token",
+  "pid": "99999",
+  "version": "0.1.0",
+  "started_at": "2026-04-01T00:00:00Z",
+  "session_root": "$session_root"
+}
+EOF
+
   run mix format --check-formatted
-  run mix test test/claw_code/daemon_test.exs test/claw_code/cli_test.exs
+  run mix test test/claw_code/daemon_test.exs test/claw_code/cli_test.exs test/claw_code/session_server_test.exs
   run mix escript.build
   run ./claw_code daemon status --daemon-root "$daemon_root"
   run ./claw_code daemon start --daemon-root "$daemon_root" --session-root "$session_root"

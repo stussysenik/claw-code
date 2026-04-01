@@ -128,8 +128,8 @@ defmodule ClawCode.Daemon do
 
   def stop(opts \\ []) do
     with {:ok, metadata} <- ensure_running(opts),
-         {:ok, result} <- request_raw(metadata, "shutdown", %{}, opts) do
-      wait_for_stopped(opts)
+         {:ok, result} <- request_raw(metadata, "shutdown", %{}, opts),
+         :ok <- wait_for_stopped(opts) do
       {:ok, result}
     end
   end
@@ -394,7 +394,7 @@ defmodule ClawCode.Daemon do
     File.write!(metadata_path(opts), Jason.encode_to_iodata!(metadata, pretty: true))
   end
 
-  defp wait_for_running(opts, attempts \\ 40)
+  defp wait_for_running(opts), do: wait_for_running(opts, wait_attempts(opts))
 
   defp wait_for_running(opts, attempts) when attempts > 0 do
     case status(opts) do
@@ -402,14 +402,14 @@ defmodule ClawCode.Daemon do
         {:ok, status}
 
       _other ->
-        Process.sleep(50)
+        Process.sleep(poll_interval_ms(opts))
         wait_for_running(opts, attempts - 1)
     end
   end
 
   defp wait_for_running(_opts, 0), do: {:error, :start_timeout}
 
-  defp wait_for_stopped(opts, attempts \\ 40)
+  defp wait_for_stopped(opts), do: wait_for_stopped(opts, wait_attempts(opts))
 
   defp wait_for_stopped(opts, attempts) when attempts > 0 do
     case status(opts) do
@@ -417,12 +417,15 @@ defmodule ClawCode.Daemon do
         :ok
 
       _other ->
-        Process.sleep(50)
+        Process.sleep(poll_interval_ms(opts))
         wait_for_stopped(opts, attempts - 1)
     end
   end
 
-  defp wait_for_stopped(_opts, 0), do: :ok
+  defp wait_for_stopped(_opts, 0), do: {:error, :stop_timeout}
+
+  defp wait_attempts(opts), do: Keyword.get(opts, :daemon_wait_attempts, 40)
+  defp poll_interval_ms(opts), do: Keyword.get(opts, :daemon_poll_interval_ms, 50)
 
   defp current_executable do
     case :escript.script_name() do
@@ -484,6 +487,7 @@ defmodule ClawCode.Daemon do
   defp parse_error("already_running"), do: :already_running
   defp parse_error("missing_executable"), do: :missing_executable
   defp parse_error("session_not_running"), do: :session_not_running
+  defp parse_error("stop_timeout"), do: :stop_timeout
   defp parse_error(other), do: other
 
   defp format_error(:not_found), do: "not_found"
@@ -493,6 +497,7 @@ defmodule ClawCode.Daemon do
   defp format_error(:already_running), do: "already_running"
   defp format_error(:missing_executable), do: "missing_executable"
   defp format_error(:session_not_running), do: "session_not_running"
+  defp format_error(:stop_timeout), do: "stop_timeout"
   defp format_error(reason) when is_binary(reason), do: reason
   defp format_error(reason), do: inspect(reason)
 

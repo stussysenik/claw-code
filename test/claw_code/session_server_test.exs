@@ -116,4 +116,42 @@ defmodule ClawCode.SessionServerTest do
     assert persisted["stop_reason"] == "cancelled"
     assert persisted["output"] == "Run cancelled."
   end
+
+  test "session server reconciles a persisted running session during recovery" do
+    root =
+      Path.join(System.tmp_dir!(), "claw-code-session-server-recovery-#{SessionStore.new_id()}")
+
+    File.rm_rf(root)
+
+    SessionStore.save(
+      %{
+        id: "session-recovered",
+        prompt: "recover me",
+        stop_reason: "running",
+        run_state: %{"status" => "running", "started_at" => "2026-04-01T00:00:00Z"},
+        messages: [%{"role" => "user", "content" => "recover me"}]
+      },
+      root: root
+    )
+
+    {:ok, "session-recovered", pid} =
+      SessionServer.ensure_started("session-recovered", root: root)
+
+    on_exit(fn ->
+      SessionServer.close(pid)
+    end)
+
+    snapshot = SessionServer.snapshot(pid)
+    assert snapshot["stop_reason"] == "run_interrupted"
+    assert snapshot["run_state"]["status"] == "idle"
+    assert snapshot["run_state"]["last_stop_reason"] == "run_interrupted"
+    assert snapshot["output"] == "Session run interrupted during recovery."
+
+    persisted = SessionStore.load("session-recovered", root: root)
+    assert persisted["stop_reason"] == "run_interrupted"
+    assert persisted["run_state"]["status"] == "idle"
+
+    assert {:ok, rerun} = SessionServer.begin_run(pid)
+    assert rerun["run_state"]["status"] == "running"
+  end
 end

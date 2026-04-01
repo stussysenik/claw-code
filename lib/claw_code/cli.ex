@@ -787,6 +787,7 @@ defmodule ClawCode.CLI do
   defp daemon_error_message(:already_running), do: "Daemon is already running."
   defp daemon_error_message(:session_not_running), do: "Session is not running in the daemon."
   defp daemon_error_message(:start_timeout), do: "Daemon did not become ready in time."
+  defp daemon_error_message(:stop_timeout), do: "Daemon did not stop in time."
 
   defp daemon_error_message(:missing_executable) do
     "Daemon start needs a built escript. Run `mix escript.build` first."
