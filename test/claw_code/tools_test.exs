@@ -69,4 +69,25 @@ defmodule ClawCode.ToolsTest do
     assert receipt.policy["rule"] == "write_disabled"
     assert receipt.policy["allow_write"] == false
   end
+
+  test "sexp_outline summarizes top-level forms through the Common Lisp adapter" do
+    source = """
+    (defpackage :demo)
+    (defun hello (name)
+      (format t "Hello, ~A" name))
+    """
+
+    assert {:ok, output, receipt} =
+             Builtin.execute_with_receipt("sexp_outline", %{"source" => source})
+
+    assert output =~ "forms=2"
+    assert output =~ "1. defpackage demo"
+    assert output =~ "2. defun hello"
+    assert receipt.tool == "sexp_outline"
+    assert receipt.kind == "runtime"
+    assert receipt.runtime == "common_lisp"
+    assert receipt.status == "ok"
+    assert receipt.invocation == "sexp_outline max_forms=20"
+    assert receipt.source_bytes == byte_size(source)
+  end
 end

@@ -425,6 +425,84 @@ defmodule ClawCode.RuntimeTest do
     assert hd(session["tool_receipts"])["runtime"] == "python"
   end
 
+  test "chat persists common lisp outline receipts when the provider requests sexp_outline" do
+    responses = [
+      %{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => nil,
+              "tool_calls" => [
+                %{
+                  "id" => "call_1",
+                  "type" => "function",
+                  "function" => %{
+                    "name" => "sexp_outline",
+                    "arguments" =>
+                      Jason.encode!(%{
+                        "source" =>
+                          ~S|(defpackage :demo) (defun hello (name) (format t "Hello, ~A" name))|
+                      })
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      %{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => "outline completed"
+            }
+          }
+        ]
+      }
+    ]
+
+    {base_url, listener, server} = start_stub_server(Enum.map(responses, &Jason.encode!/1))
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    result =
+      Runtime.chat("outline this lisp snippet",
+        provider: "generic",
+        base_url: base_url,
+        api_key: "test-key",
+        model: "test-model",
+        native: false
+      )
+
+    assert result.stop_reason == "completed"
+    assert result.output == "outline completed"
+    assert length(result.tool_receipts) == 1
+
+    [receipt] = result.tool_receipts
+    assert receipt.tool_name == "sexp_outline"
+    assert receipt.argument_keys == ["source"]
+    assert receipt.status == "ok"
+    assert receipt.runtime == "common_lisp"
+    assert receipt.output =~ "forms=2"
+    assert receipt.output =~ "defun hello"
+    assert receipt.invocation == "sexp_outline max_forms=20"
+
+    session =
+      result.session_path
+      |> Path.basename(".json")
+      |> then(&SessionStore.load(&1, root: Path.dirname(result.session_path)))
+
+    assert hd(session["tool_receipts"])["tool_name"] == "sexp_outline"
+    assert hd(session["tool_receipts"])["runtime"] == "common_lisp"
+    assert hd(session["tool_receipts"])["output"] =~ "forms=2"
+    assert hd(session["tool_receipts"])["invocation"] == "sexp_outline max_forms=20"
+  end
+
   test "chat works with a generic openai-compatible endpoint that does not require auth" do
     responses = [
       %{

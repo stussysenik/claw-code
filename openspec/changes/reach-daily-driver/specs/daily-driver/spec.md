@@ -124,6 +124,13 @@ Local tool and adapter execution MUST remain gated, replayable, and explicit und
 - **AND** timeout state, nonzero exit status, and merged stderr/stdout output remain visible in the persisted receipt
 - **AND** the surrounding session remains readable and recoverable
 
+#### Scenario: Common Lisp can provide structured analysis beyond raw eval
+
+- **GIVEN** the operator or model needs structure from s-expression-heavy source text
+- **WHEN** `claw_code` runs the `sexp_outline` local tool
+- **THEN** the result returns a compact top-level outline instead of requiring arbitrary Common Lisp eval
+- **AND** the persisted receipt still exposes the Common Lisp runtime, engine, invocation, and output for replay or inspection
+
 ### Requirement: Daily TUI Operator Loop
 
 The TUI MUST cover the normal local operator loop without becoming a second runtime.

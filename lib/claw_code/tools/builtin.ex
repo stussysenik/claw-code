@@ -47,7 +47,20 @@ defmodule ClawCode.Tools.Builtin do
           "timeout_ms" => %{"type" => "integer", "minimum" => 100, "maximum" => 60_000}
         },
         "required" => ["code"]
-      })
+      }),
+      function_spec(
+        "sexp_outline",
+        "Outline top-level s-expressions from source text through the Common Lisp adapter.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "source" => %{"type" => "string"},
+            "max_forms" => %{"type" => "integer", "minimum" => 1, "maximum" => 200},
+            "timeout_ms" => %{"type" => "integer", "minimum" => 100, "maximum" => 60_000}
+          },
+          "required" => ["source"]
+        }
+      )
     ]
 
     base_specs
@@ -240,6 +253,27 @@ defmodule ClawCode.Tools.Builtin do
     |> format_runtime_result("lisp_eval")
   end
 
+  def execute_with_receipt("sexp_outline", %{"source" => source} = arguments, _opts) do
+    source = to_string(source)
+    max_forms = sexp_max_forms(arguments["max_forms"])
+
+    Host.run_runtime_with_receipt(
+      :common_lisp,
+      sexp_outline_program(),
+      runtime_opts(
+        arguments,
+        env: [
+          {"CLAW_SEXP_SOURCE", source},
+          {"CLAW_SEXP_MAX_FORMS", Integer.to_string(max_forms)}
+        ]
+      )
+    )
+    |> format_runtime_result("sexp_outline", %{
+      invocation: "sexp_outline max_forms=#{max_forms}",
+      source_bytes: byte_size(source)
+    })
+  end
+
   def execute_with_receipt(name, _arguments, _opts) do
     message = "unknown local tool: #{name}"
 
@@ -316,16 +350,102 @@ defmodule ClawCode.Tools.Builtin do
   defp shell_timeout(value) when is_binary(value),
     do: value |> String.to_integer() |> shell_timeout()
 
-  defp format_runtime_result({:ok, output, receipt}, tool_name) do
-    {:ok, output, receipt |> Map.put(:tool, tool_name) |> Map.put(:kind, "runtime")}
+  defp format_runtime_result(result, tool_name, extras \\ %{})
+
+  defp format_runtime_result({:ok, output, receipt}, tool_name, extras) do
+    {:ok, output,
+     receipt |> Map.put(:tool, tool_name) |> Map.put(:kind, "runtime") |> Map.merge(extras)}
   end
 
-  defp format_runtime_result({:error, output, receipt}, tool_name) when is_binary(output) do
-    {:error, output, receipt |> Map.put(:tool, tool_name) |> Map.put(:kind, "runtime")}
+  defp format_runtime_result({:error, output, receipt}, tool_name, extras)
+       when is_binary(output) do
+    {:error, output,
+     receipt |> Map.put(:tool, tool_name) |> Map.put(:kind, "runtime") |> Map.merge(extras)}
   end
 
-  defp runtime_timeout_opts(%{"timeout_ms" => value}), do: [timeout_ms: shell_timeout(value)]
-  defp runtime_timeout_opts(_arguments), do: []
+  defp runtime_timeout_opts(arguments), do: runtime_opts(arguments)
+
+  defp runtime_opts(arguments, extras \\ []) do
+    timeout_opts =
+      case Map.fetch(arguments, "timeout_ms") do
+        {:ok, value} -> [timeout_ms: shell_timeout(value)]
+        :error -> []
+      end
+
+    timeout_opts ++ extras
+  end
+
+  defp sexp_max_forms(nil), do: 20
+  defp sexp_max_forms(value) when is_integer(value), do: max(1, min(value, 200))
+
+  defp sexp_max_forms(value) when is_binary(value),
+    do: value |> String.to_integer() |> sexp_max_forms()
+
+  defp sexp_outline_program do
+    """
+    (labels
+        ((getenv* (name)
+           (or #+sbcl (sb-ext:posix-getenv name)
+               #+clisp (ext:getenv name)
+               nil))
+         (parse-int (value default)
+           (handler-case
+               (if value
+                   (parse-integer value)
+                   default)
+             (error () default)))
+         (form-depth (form)
+           (if (atom form)
+               0
+               (1+ (reduce #'max (mapcar #'form-depth form) :initial-value 0))))
+         (head-label (form)
+           (cond
+             ((and (consp form) (symbolp (car form)))
+              (string-downcase (symbol-name (car form))))
+             ((consp form) "list")
+             (t "atom")))
+         (name-label (form)
+           (when (and (consp form) (symbolp (second form)))
+             (string-downcase (symbol-name (second form)))))
+         (summary-line (form index)
+           (let ((head (head-label form))
+                 (name (name-label form)))
+             (format nil "~D. ~A~@[ ~A~] depth=~D"
+                     index
+                     head
+                     name
+                     (form-depth form))))
+         (fail (message)
+           (format *error-output* "~A~%" message)
+           (finish-output *error-output*)
+           #+sbcl (sb-ext:exit :code 2)
+           #+clisp (ext:quit 2)))
+      (handler-case
+          (let* ((source (or (getenv* "CLAW_SEXP_SOURCE") ""))
+                 (max-forms (max 1 (min 200 (parse-int (getenv* "CLAW_SEXP_MAX_FORMS") 20)))))
+            (with-input-from-string (stream source)
+              (let ((summaries '())
+                    (count 0)
+                    (deepest 0)
+                    (truncated nil))
+                (loop
+                  for form = (read stream nil :eof)
+                  until (eq form :eof)
+                  do (let ((depth (form-depth form)))
+                       (incf count)
+                       (setf deepest (max deepest depth))
+                       (if (<= count max-forms)
+                           (push (summary-line form count) summaries)
+                           (setf truncated t))))
+                (format t "forms=~D shown=~D max_depth=~D~%" count (min count max-forms) deepest)
+                (dolist (summary (nreverse summaries))
+                  (format t "~A~%" summary))
+                (when truncated
+                  (format t "truncated=true~%")))))
+        (error (condition)
+          (fail (format nil "sexp parse failed: ~A" condition)))))
+    """
+  end
 
   defp local_receipt(tool_name, started_at, exit_status, output, extras) do
     Map.merge(

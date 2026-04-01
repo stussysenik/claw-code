@@ -85,6 +85,21 @@ defmodule ClawCode.HostTest do
     assert receipt.runtime == "common_lisp"
   end
 
+  test "common lisp runtime accepts env vars for helper tools" do
+    runtime = Host.runtime(:common_lisp)
+
+    assert {:ok, output, receipt} =
+             Host.run_runtime_with_receipt(
+               :common_lisp,
+               lisp_env_echo_code(runtime.engine),
+               env: [{"CLAW_HOST_TEST", "env-ok"}]
+             )
+
+    assert output == "env-ok"
+    assert receipt.runtime == "common_lisp"
+    assert receipt.env_keys == ["CLAW_HOST_TEST"]
+  end
+
   defp lisp_exit_code("sbcl") do
     "(progn (format *error-output* \"lisp-boom~%\") (finish-output *error-output*) (sb-ext:exit :code 11))"
   end
@@ -95,5 +110,13 @@ defmodule ClawCode.HostTest do
 
   defp lisp_sleep_code do
     "(sleep 1)"
+  end
+
+  defp lisp_env_echo_code("sbcl") do
+    "(format t \"~A\" (or (sb-ext:posix-getenv \"CLAW_HOST_TEST\") \"\"))"
+  end
+
+  defp lisp_env_echo_code("clisp") do
+    "(format t \"~A\" (or (ext:getenv \"CLAW_HOST_TEST\") \"\"))"
   end
 end

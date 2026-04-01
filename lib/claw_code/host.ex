@@ -44,7 +44,7 @@ defmodule ClawCode.Host do
   def run_runtime_with_receipt(:common_lisp, code, opts) do
     case runtime(:common_lisp) do
       %{available: true, engine: "sbcl"} = runtime ->
-        invoke(runtime, ["--non-interactive", "--eval", code], opts)
+        invoke(runtime, ["--noinform", "--non-interactive", "--eval", code], opts)
 
       %{available: true, engine: "clisp"} = runtime ->
         invoke(runtime, ["-q", "-x", code], opts)
@@ -72,13 +72,12 @@ defmodule ClawCode.Host do
 
   defp invoke(%{available: true, binary: binary} = runtime, args, opts) do
     timeout_ms = Keyword.get(opts, :timeout_ms)
+    env = Keyword.get(opts, :env, [])
 
     external_opts =
-      if is_nil(timeout_ms) do
-        []
-      else
-        [timeout_ms: timeout_ms]
-      end
+      []
+      |> maybe_put_timeout(timeout_ms)
+      |> maybe_put_env(env)
 
     case External.run_with_receipt(binary, args, external_opts) do
       {:ok, output, receipt} -> {:ok, output, annotate_receipt(receipt, runtime, args)}
@@ -119,4 +118,10 @@ defmodule ClawCode.Host do
       invocation: Enum.join([Path.basename(runtime.binary) | Enum.map(args, &to_string/1)], " ")
     })
   end
+
+  defp maybe_put_timeout(opts, nil), do: opts
+  defp maybe_put_timeout(opts, timeout_ms), do: Keyword.put(opts, :timeout_ms, timeout_ms)
+
+  defp maybe_put_env(opts, []), do: opts
+  defp maybe_put_env(opts, env), do: Keyword.put(opts, :env, env)
 end

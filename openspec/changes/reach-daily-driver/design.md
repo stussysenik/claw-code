@@ -116,6 +116,7 @@ Required outputs:
 - hardened shell/write policy receipts
 - explicit subprocess failure and timeout evidence for Python, Lua, and Common Lisp
 - runtime adapter receipts that preserve engine, invocation, exit status, and merged output under both failure and timeout
+- one structured Common Lisp-backed tool path that justifies keeping the adapter beyond raw eval
 - native ranker build, disable, and fallback proof
 - one documented policy for when Zig is worth adding to a feature
 
