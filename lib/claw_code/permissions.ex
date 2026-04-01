@@ -14,4 +14,24 @@ defmodule ClawCode.Permissions do
     not MapSet.member?(context.deny_tools, tool_name) and
       Enum.all?(context.deny_prefixes, fn prefix -> not String.starts_with?(downcased, prefix) end)
   end
+
+  def snapshot(opts \\ []) do
+    context = new(opts)
+
+    %{
+      tool_policy: snapshot_tool_policy(opts),
+      allow_shell: Keyword.get(opts, :allow_shell, false),
+      allow_write: Keyword.get(opts, :allow_write, false),
+      deny_tools: context.deny_tools |> MapSet.to_list() |> Enum.sort(),
+      deny_prefixes: Enum.sort(context.deny_prefixes)
+    }
+  end
+
+  defp snapshot_tool_policy(opts) do
+    cond do
+      Keyword.get(opts, :tools) == true -> :enabled
+      Keyword.get(opts, :tools) == false -> :disabled
+      true -> :auto
+    end
+  end
 end

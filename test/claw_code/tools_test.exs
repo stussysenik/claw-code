@@ -48,5 +48,25 @@ defmodule ClawCode.ToolsTest do
     assert message =~ "blocked by policy"
     assert receipt.status == "blocked"
     assert receipt.exit_status == "blocked"
+    assert receipt.policy["decision"] == "blocked"
+    assert receipt.policy["rule"] == "blocked_shell_prefix"
+    assert receipt.policy["blocked_prefix"] == "rm"
+    assert receipt.policy["allow_shell"] == true
+  end
+
+  test "write_file reports disabled policy in the receipt" do
+    assert {:error, message, receipt} =
+             Builtin.execute_with_receipt(
+               "write_file",
+               %{"path" => "tmp/example.txt", "content" => "hello"},
+               allow_write: false
+             )
+
+    assert message =~ "write_file is disabled"
+    assert receipt.status == "blocked"
+    assert receipt.exit_status == "blocked"
+    assert receipt.policy["decision"] == "blocked"
+    assert receipt.policy["rule"] == "write_disabled"
+    assert receipt.policy["allow_write"] == false
   end
 end

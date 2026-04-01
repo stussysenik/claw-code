@@ -114,6 +114,38 @@ defmodule ClawCode.ProviderTest do
     )
   end
 
+  test "vision config can be resolved from env for a split provider setup" do
+    with_env(
+      %{
+        "CLAW_VISION_PROVIDER" => "kimi",
+        "CLAW_VISION_BASE_URL" => nil,
+        "CLAW_VISION_API_KEY" => nil,
+        "CLAW_VISION_API_KEY_HEADER" => nil,
+        "CLAW_VISION_MODEL" => "kimi-k2.5",
+        "KIMI_BASE_URL" => nil,
+        "MOONSHOT_BASE_URL" => nil,
+        "KIMI_API_KEY" => "kimi-test-key",
+        "MOONSHOT_API_KEY" => nil
+      },
+      fn ->
+        primary =
+          OpenAICompatible.resolve_config(
+            provider: "glm",
+            base_url: "http://127.0.0.1:4000/v1",
+            api_key: "glm-test-key",
+            model: "GLM-5.1"
+          )
+
+        vision = OpenAICompatible.resolve_vision_config([], primary)
+
+        assert vision.provider == "kimi"
+        assert vision.base_url == "https://api.moonshot.ai/v1"
+        assert vision.api_key == "kimi-test-key"
+        assert vision.model == "kimi-k2.5"
+      end
+    )
+  end
+
   test "provider diagnostics show defaulted and missing fields without leaking keys" do
     with_env(
       %{
@@ -155,6 +187,7 @@ defmodule ClawCode.ProviderTest do
 
         assert diagnostics.profile.auth_mode == "optional"
         assert diagnostics.profile.tool_support == "compatible"
+        assert diagnostics.profile.input_modalities == ["text", "image"]
         assert diagnostics.profile.payload_modes == ["standard", "minimal"]
         assert diagnostics.profile.fallback_modes == ["retry_minimal_payload"]
         assert "local" in diagnostics.profile.aliases
@@ -224,6 +257,129 @@ defmodule ClawCode.ProviderTest do
     )
   end
 
+  test "probe sends local image inputs through multimodal request content" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "claw-code-provider-probe-image-#{System.unique_integer([:positive])}"
+      )
+
+    File.rm_rf(root)
+    File.mkdir_p!(root)
+
+    image_path = write_png(root, "probe-image.png")
+
+    responses = [
+      Jason.encode!(%{
+        "choices" => [%{"message" => %{"role" => "assistant", "content" => "probe-image-ok"}}]
+      })
+    ]
+
+    {base_url, listener, server} = start_stub_server(responses, capture_requests: true)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+      File.rm_rf(root)
+    end)
+
+    assert {:ok, payload} =
+             OpenAICompatible.probe(
+               provider: "generic",
+               base_url: base_url,
+               model: "local-model",
+               image: image_path,
+               prompt: "describe this image"
+             )
+
+    assert payload.status == "ok"
+    assert payload.request_modalities == ["text", "image"]
+    assert payload.response_preview == "probe-image-ok"
+
+    assert_receive {:request, request}, 1_000
+    assert request =~ "\"type\":\"image_url\""
+    assert request =~ "data:image/png;base64,"
+  end
+
+  test "probe returns an explicit invalid_input payload when an image path is missing" do
+    missing_path =
+      Path.join(
+        System.tmp_dir!(),
+        "claw-code-provider-probe-missing-#{System.unique_integer([:positive])}.png"
+      )
+
+    assert {:error, payload} =
+             OpenAICompatible.probe(
+               provider: "generic",
+               base_url: "http://127.0.0.1:1/v1",
+               model: "local-model",
+               image: missing_path,
+               prompt: "describe this image"
+             )
+
+    assert payload.status == "invalid_input"
+    assert payload.request_modalities == ["text", "image"]
+    assert payload.error =~ "Image input does not exist"
+  end
+
+  test "chat normalizes local image parts into openai image_url content" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "claw-code-provider-image-#{System.unique_integer([:positive])}"
+      )
+
+    File.rm_rf(root)
+    File.mkdir_p!(root)
+
+    image_path = write_png(root, "provider-image.png")
+
+    responses = [
+      Jason.encode!(%{
+        "choices" => [%{"message" => %{"role" => "assistant", "content" => "image-ok"}}]
+      })
+    ]
+
+    {base_url, listener, server} = start_stub_server(responses, capture_requests: true)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+      File.rm_rf(root)
+    end)
+
+    assert {:ok, _response} =
+             OpenAICompatible.chat(
+               %OpenAICompatible{
+                 provider: "generic",
+                 base_url: base_url,
+                 api_key: nil,
+                 api_key_header: "Authorization",
+                 model: "local-model"
+               },
+               [
+                 %{
+                   "role" => "user",
+                   "content" => [
+                     %{"type" => "text", "text" => "describe this image"},
+                     %{
+                       "type" => "input_image",
+                       "path" => image_path,
+                       "mime_type" => "image/png"
+                     }
+                   ]
+                 }
+               ],
+               tools: []
+             )
+
+    assert_receive {:request, request}, 1_000
+    assert request =~ "\"type\":\"image_url\""
+    assert request =~ "\"type\":\"text\""
+    assert request =~ "data:image/png;base64,"
+    refute request =~ "\"type\":\"input_image\""
+  end
+
   defp with_env(overrides, fun) do
     previous =
       Enum.into(overrides, %{}, fn {key, _value} -> {key, System.get_env(key)} end)
@@ -243,21 +399,23 @@ defmodule ClawCode.ProviderTest do
     fun.()
   end
 
-  defp start_stub_server(responses) do
+  defp start_stub_server(responses, opts \\ []) do
     {:ok, listener} =
       :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true])
 
     {:ok, port} = :inet.port(listener)
+    request_caller = self()
+    capture_requests? = Keyword.get(opts, :capture_requests, false)
 
     server =
       spawn_link(fn ->
-        serve_responses(listener, responses)
+        serve_responses(listener, responses, request_caller, capture_requests?)
       end)
 
     {"http://127.0.0.1:#{port}/v1", listener, server}
   end
 
-  defp serve_responses(listener, responses) do
+  defp serve_responses(listener, responses, request_caller, capture_requests?) do
     Enum.each(responses, fn response ->
       {body, raw_response?} =
         case response do
@@ -266,7 +424,12 @@ defmodule ClawCode.ProviderTest do
         end
 
       {:ok, socket} = :gen_tcp.accept(listener)
-      {:ok, _request} = read_request(socket, "")
+      {:ok, request} = read_request(socket, "")
+
+      if capture_requests? do
+        send(request_caller, {:request, request})
+      end
+
       :ok = :gen_tcp.send(socket, if(raw_response?, do: body, else: http_response(200, body)))
       :gen_tcp.close(socket)
     end)
@@ -319,5 +482,18 @@ defmodule ClawCode.ProviderTest do
       body
     ]
     |> IO.iodata_to_binary()
+  end
+
+  defp write_png(root, name) do
+    path = Path.join(root, name)
+
+    File.write!(
+      path,
+      Base.decode64!(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7+X3cAAAAASUVORK5CYII="
+      )
+    )
+
+    path
   end
 end

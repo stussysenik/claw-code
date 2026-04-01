@@ -96,6 +96,7 @@ This file stays intentionally coarse. The detailed daily-driver plan and remaini
 
 Use the OpenSpec layer when you need the full remaining path to daily-driver status:
 
+- [ROADMAP.md](../ROADMAP.md)
 - [openspec/README.md](../openspec/README.md)
 - [openspec/project.md](../openspec/project.md)
 - [openspec/changes/reach-daily-driver/proposal.md](../openspec/changes/reach-daily-driver/proposal.md)
@@ -103,7 +104,7 @@ Use the OpenSpec layer when you need the full remaining path to daily-driver sta
 - [openspec/changes/reach-daily-driver/tasks.md](../openspec/changes/reach-daily-driver/tasks.md)
 - [openspec/changes/reach-daily-driver/specs/daily-driver/spec.md](../openspec/changes/reach-daily-driver/specs/daily-driver/spec.md)
 
-The phase plan above explains the coarse execution order. OpenSpec carries the sharper daily-driver bar, parallel-lane split, and remaining task checklist.
+`ROADMAP.md` is the short product and competitive-planning entrypoint. The phase plan above explains the coarse execution order. OpenSpec carries the sharper daily-driver bar, parallel-lane split, and remaining task checklist.
 
 ## Daemon Proposal
 

@@ -18,6 +18,7 @@
 ## Operator Notes
 
 - Start with one lane at a time unless OMX `$team` is coordinating the split explicitly.
+- Use `ROADMAP.md` for the short readiness and competitive-plan view, then use `openspec/changes/reach-daily-driver/` for the sharper phase bar.
 - Use `openspec/changes/reach-daily-driver/` as the canonical phase map for the remaining daily-driver work.
 - Do not expand shell or write capability without tests and receipts.
 - Treat the requirements ledger as a blocking reliability feature, not optional polish.

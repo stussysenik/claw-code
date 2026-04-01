@@ -117,6 +117,48 @@ defmodule ClawCode.SessionServerTest do
     assert persisted["output"] == "Run cancelled."
   end
 
+  test "record_run_exit persists crash state synchronously before later inspection" do
+    root =
+      Path.join(System.tmp_dir!(), "claw-code-session-server-crash-#{SessionStore.new_id()}")
+
+    File.rm_rf(root)
+
+    {:ok, session_id, pid} = SessionServer.ensure_started("session-crash", root: root)
+
+    on_exit(fn ->
+      SessionServer.close(pid)
+    end)
+
+    assert {:ok, _document} = SessionServer.begin_run(pid)
+    task_pid = spawn(fn -> Process.sleep(5_000) end)
+    assert :ok = SessionServer.attach_run(pid, task_pid)
+
+    {_path, crashed} = SessionServer.record_run_exit(pid, :boom)
+
+    assert crashed["stop_reason"] == "run_crashed"
+    assert crashed["output"] == "Session run crashed: :boom"
+    assert crashed["run_state"]["status"] == "idle"
+    assert crashed["run_state"]["last_stop_reason"] == "run_crashed"
+
+    snapshot = SessionServer.snapshot(pid)
+    assert snapshot["stop_reason"] == "run_crashed"
+    assert snapshot["output"] == "Session run crashed: :boom"
+
+    persisted = SessionStore.load(session_id, root: root)
+    assert persisted["stop_reason"] == "run_crashed"
+    assert persisted["output"] == "Session run crashed: :boom"
+
+    {_path, finished} =
+      SessionServer.finish_run(pid, %{
+        "prompt" => "should not win",
+        "output" => "late reply",
+        "stop_reason" => "completed"
+      })
+
+    assert finished["stop_reason"] == "run_crashed"
+    assert finished["output"] == "Session run crashed: :boom"
+  end
+
   test "session server reconciles a persisted running session during recovery" do
     root =
       Path.join(System.tmp_dir!(), "claw-code-session-server-recovery-#{SessionStore.new_id()}")
@@ -153,5 +195,23 @@ defmodule ClawCode.SessionServerTest do
 
     assert {:ok, rerun} = SessionServer.begin_run(pid)
     assert rerun["run_state"]["status"] == "running"
+  end
+
+  test "session server refuses to start against an invalid persisted session" do
+    root =
+      Path.join(System.tmp_dir!(), "claw-code-session-server-invalid-#{SessionStore.new_id()}")
+
+    File.rm_rf(root)
+    File.mkdir_p!(root)
+
+    on_exit(fn -> File.rm_rf(root) end)
+
+    File.write!(Path.join(root, "broken-session.json"), "{not-json")
+
+    assert {:error, {:invalid_session, details} = reason} =
+             SessionServer.ensure_started("broken-session", root: root)
+
+    assert details.session_id == "broken-session"
+    assert SessionStore.error_message(reason) =~ "Session state is invalid for broken-session"
   end
 end

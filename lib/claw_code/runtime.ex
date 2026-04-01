@@ -1,5 +1,5 @@
 defmodule ClawCode.Runtime do
-  alias ClawCode.{Router, SessionServer, SessionStore}
+  alias ClawCode.{Multimodal, Permissions, Router, SessionServer, SessionStore, VisionBackbone}
   alias ClawCode.Providers.OpenAICompatible
   alias ClawCode.Tools.Builtin
 
@@ -13,6 +13,8 @@ defmodule ClawCode.Runtime do
       :session_id,
       :turns,
       :provider,
+      :vision_backbone,
+      :permissions,
       :requirements,
       tool_receipts: [],
       routed_matches: [],
@@ -46,60 +48,117 @@ defmodule ClawCode.Runtime do
     config = OpenAICompatible.resolve_config(opts)
     matches = Router.route(prompt, route_opts(opts))
 
-    {:ok, session_id, session_pid} =
-      SessionServer.ensure_started(opts[:session_id], session_server_opts(opts))
+    case SessionServer.ensure_started(opts[:session_id], session_server_opts(opts)) do
+      {:ok, session_id, session_pid} ->
+        case SessionServer.begin_run(session_pid) do
+          {:ok, session} ->
+            existing_messages = session["messages"] || []
+            existing_receipts = session["tool_receipts"] || []
+            existing_turns = session["turns"] || 0
+            requirements = SessionStore.requirements_ledger()
+            permissions = permissions_snapshot(opts)
 
-    case SessionServer.begin_run(session_pid) do
-      {:ok, session} ->
-        messages = seed_messages(prompt, matches, session["messages"] || [])
-        existing_receipts = session["tool_receipts"] || []
-        existing_turns = session["turns"] || 0
+            case user_content(prompt, opts) do
+              {:ok, content} ->
+                messages = seed_messages(matches, existing_messages, content)
 
-        context = %{
-          prompt: prompt,
-          config: config,
-          matches: matches,
-          opts: opts,
-          session_id: session_id,
-          session_pid: session_pid,
-          existing_turns: existing_turns,
-          requirements: SessionStore.requirements_ledger()
-        }
+                case prepare_messages_for_primary(messages, config, opts) do
+                  {:ok, prepared_messages, vision_backbone} ->
+                    context = %{
+                      prompt: prompt,
+                      config: config,
+                      matches: matches,
+                      opts: opts,
+                      session_id: session_id,
+                      session_pid: session_pid,
+                      existing_turns: existing_turns,
+                      requirements: requirements,
+                      vision_backbone: vision_backbone,
+                      permissions: permissions
+                    }
 
-        checkpoint_result(session_pid, context, messages, existing_receipts, existing_turns)
+                    checkpoint_result(
+                      session_pid,
+                      context,
+                      prepared_messages,
+                      existing_receipts,
+                      existing_turns
+                    )
 
-        if OpenAICompatible.configured?(config) do
-          task =
-            Task.Supervisor.async_nolink(ClawCode.TaskSupervisor, fn ->
-              run_chat_session(context, messages, existing_receipts)
-            end)
+                    if OpenAICompatible.configured?(config) do
+                      task =
+                        Task.Supervisor.async_nolink(ClawCode.TaskSupervisor, fn ->
+                          run_chat_session(context, prepared_messages, existing_receipts)
+                        end)
 
-          case SessionServer.attach_run(session_pid, task.pid) do
-            :ok ->
-              await_run(task, context)
+                      case SessionServer.attach_run(session_pid, task.pid) do
+                        :ok ->
+                          await_run(task, context)
 
-            {:error, :not_running} ->
-              _ = Task.shutdown(task, :brutal_kill)
-              interrupted_result(context)
-          end
-        else
-          finalize_result(
-            session_pid,
-            prompt,
-            missing_provider_message(config),
-            "missing_provider_config",
-            existing_turns,
-            config,
-            matches,
-            messages,
-            existing_receipts,
-            session_id,
-            context.requirements
-          )
+                        {:error, :not_running} ->
+                          _ = Task.shutdown(task, :brutal_kill)
+                          interrupted_result(context)
+                      end
+                    else
+                      finalize_result(
+                        session_pid,
+                        prompt,
+                        missing_provider_message(config),
+                        "missing_provider_config",
+                        existing_turns,
+                        config,
+                        matches,
+                        prepared_messages,
+                        existing_receipts,
+                        session_id,
+                        requirements,
+                        vision_backbone,
+                        permissions
+                      )
+                    end
+
+                  {:error, stop_reason, message, prepared_messages, vision_backbone} ->
+                    finalize_result(
+                      session_pid,
+                      prompt,
+                      message,
+                      stop_reason,
+                      existing_turns,
+                      config,
+                      matches,
+                      prepared_messages,
+                      existing_receipts,
+                      session_id,
+                      requirements,
+                      vision_backbone,
+                      permissions
+                    )
+                end
+
+              {:error, message} ->
+                finalize_result(
+                  session_pid,
+                  prompt,
+                  message,
+                  "invalid_image_input",
+                  existing_turns,
+                  config,
+                  matches,
+                  existing_messages,
+                  existing_receipts,
+                  session_id,
+                  requirements,
+                  nil,
+                  permissions
+                )
+            end
+
+          {:error, :session_busy, session} ->
+            busy_result(session_id, session, config, matches, prompt, opts)
         end
 
-      {:error, :session_busy, session} ->
-        busy_result(session_id, session, config, matches, prompt, opts)
+      {:error, {:invalid_session, _details} = reason} ->
+        invalid_session_result(prompt, config, matches, opts, reason)
     end
   end
 
@@ -110,6 +169,9 @@ defmodule ClawCode.Runtime do
                SessionServer.ensure_started(session_id, session_server_opts(opts)) do
           SessionServer.cancel_run(session_pid)
         end
+
+      {:error, {:invalid_session, _details} = reason} ->
+        {:error, reason}
 
       :error ->
         {:error, :not_found}
@@ -128,7 +190,8 @@ defmodule ClawCode.Runtime do
            context.opts,
            1,
            Keyword.get(context.opts, :max_turns, 6),
-           existing_receipts
+           existing_receipts,
+           VisionBackbone.primary_chat_opts(context.vision_backbone)
          ) do
       {:ok, final_messages, output, stop_reason, turns, receipts} ->
         finalize_result(
@@ -142,7 +205,9 @@ defmodule ClawCode.Runtime do
           final_messages,
           receipts,
           context.session_id,
-          context.requirements
+          context.requirements,
+          context.vision_backbone,
+          context.permissions
         )
 
       {:error, message, final_messages, receipts, turns} ->
@@ -157,18 +222,42 @@ defmodule ClawCode.Runtime do
           final_messages,
           receipts,
           context.session_id,
-          context.requirements
+          context.requirements,
+          context.vision_backbone,
+          context.permissions
         )
     end
   end
 
-  defp loop(_session_pid, _context, messages, _config, _tools, _opts, turn, max_turns, receipts)
+  defp loop(
+         _session_pid,
+         _context,
+         messages,
+         _config,
+         _tools,
+         _opts,
+         turn,
+         max_turns,
+         receipts,
+         _provider_opts
+       )
        when turn > max_turns do
     {:ok, messages, "Tool loop limit reached.", "max_turns_reached", max_turns, receipts}
   end
 
-  defp loop(session_pid, context, messages, config, tools, opts, turn, max_turns, receipts) do
-    case OpenAICompatible.chat(config, messages, tools: tools) do
+  defp loop(
+         session_pid,
+         context,
+         messages,
+         config,
+         tools,
+         opts,
+         turn,
+         max_turns,
+         receipts,
+         provider_opts
+       ) do
+    case OpenAICompatible.chat(config, messages, Keyword.merge([tools: tools], provider_opts)) do
       {:ok, response} ->
         case OpenAICompatible.assistant_message(response) do
           {:ok, message} ->
@@ -214,7 +303,8 @@ defmodule ClawCode.Runtime do
                   opts,
                   turn + 1,
                   max_turns,
-                  next_receipts
+                  next_receipts,
+                  provider_opts
                 )
             end
 
@@ -225,7 +315,18 @@ defmodule ClawCode.Runtime do
       {:error, reason} ->
         if tools != [] and tool_policy(opts) == :auto and
              OpenAICompatible.tooling_unsupported?(reason) do
-          loop(session_pid, context, messages, config, [], opts, turn, max_turns, receipts)
+          loop(
+            session_pid,
+            context,
+            messages,
+            config,
+            [],
+            opts,
+            turn,
+            max_turns,
+            receipts,
+            provider_opts
+          )
         else
           {:error, reason, messages, receipts, max(turn - 1, 0)}
         end
@@ -303,7 +404,9 @@ defmodule ClawCode.Runtime do
          messages,
          tool_receipts,
          session_id,
-         requirements
+         requirements,
+         vision_backbone,
+         permissions
        ) do
     payload = %{
       id: session_id,
@@ -311,7 +414,8 @@ defmodule ClawCode.Runtime do
       output: output,
       stop_reason: stop_reason,
       turns: turns,
-      provider: provider_snapshot(config),
+      provider: provider_snapshot(config, vision_backbone),
+      permissions: permission_payload(permissions),
       routed_matches: Enum.map(matches, &Map.from_struct/1),
       messages: messages,
       tool_receipts: tool_receipts,
@@ -328,11 +432,13 @@ defmodule ClawCode.Runtime do
       session_id: document["id"],
       turns: turns,
       provider: config.provider,
+      vision_backbone: vision_backbone,
+      permissions: permissions,
       requirements: requirements,
       tool_receipts: tool_receipts,
       routed_matches: matches,
-      matched_commands: Enum.filter(matches, &(&1.kind == :command)),
-      matched_tools: Enum.filter(matches, &(&1.kind == :tool)),
+      matched_commands: matched_commands(matches),
+      matched_tools: matched_tools(matches),
       messages: messages
     }
   end
@@ -342,7 +448,8 @@ defmodule ClawCode.Runtime do
       id: context.session_id,
       prompt: context.prompt,
       turns: turns,
-      provider: provider_snapshot(context.config),
+      provider: provider_snapshot(context.config, context.vision_backbone),
+      permissions: permission_payload(context.permissions),
       routed_matches: Enum.map(context.matches, &Map.from_struct/1),
       messages: messages,
       tool_receipts: tool_receipts,
@@ -355,11 +462,13 @@ defmodule ClawCode.Runtime do
       {:ok, result} ->
         result
 
-      {:exit, _reason} ->
+      {:exit, reason} ->
+        _ = SessionServer.record_run_exit(context.session_pid, reason)
         interrupted_result(context)
 
       nil ->
         _ = Task.shutdown(task, :brutal_kill)
+        _ = SessionServer.record_run_exit(context.session_pid, :shutdown)
         interrupted_result(context)
     end
   end
@@ -373,12 +482,36 @@ defmodule ClawCode.Runtime do
       session_id: session_id,
       turns: session["turns"] || 0,
       provider: config.provider,
+      vision_backbone: get_in(session, ["provider", "vision_backbone"]),
+      permissions: session["permissions"] || permissions_snapshot(opts),
       requirements: session["requirements"] || SessionStore.requirements_ledger(),
       tool_receipts: session["tool_receipts"] || [],
       routed_matches: matches,
-      matched_commands: Enum.filter(matches, &(&1.kind == :command)),
-      matched_tools: Enum.filter(matches, &(&1.kind == :tool)),
+      matched_commands: matched_commands(matches),
+      matched_tools: matched_tools(matches),
       messages: session["messages"] || []
+    }
+  end
+
+  defp invalid_session_result(prompt, config, matches, opts, reason) do
+    session_id = opts[:session_id] || "invalid-session"
+
+    %Result{
+      prompt: prompt,
+      output: SessionStore.error_message(reason),
+      stop_reason: "invalid_session_state",
+      session_path: SessionStore.path(session_id, session_server_opts(opts)),
+      session_id: session_id,
+      turns: 0,
+      provider: config.provider,
+      vision_backbone: nil,
+      permissions: permissions_snapshot(opts),
+      requirements: SessionStore.requirements_ledger(),
+      tool_receipts: [],
+      routed_matches: matches,
+      matched_commands: matched_commands(matches),
+      matched_tools: matched_tools(matches),
+      messages: []
     }
   end
 
@@ -394,26 +527,67 @@ defmodule ClawCode.Runtime do
       session_id: context.session_id,
       turns: session["turns"] || context.existing_turns,
       provider: context.config.provider,
+      vision_backbone:
+        get_in(session, ["provider", "vision_backbone"]) || context.vision_backbone,
+      permissions: session["permissions"] || permission_payload(context.permissions),
       requirements: session["requirements"] || context.requirements,
       tool_receipts: session["tool_receipts"] || [],
       routed_matches: context.matches,
-      matched_commands: Enum.filter(context.matches, &(&1.kind == :command)),
-      matched_tools: Enum.filter(context.matches, &(&1.kind == :tool)),
+      matched_commands: matched_commands(context.matches),
+      matched_tools: matched_tools(context.matches),
       messages: session["messages"] || []
     }
   end
 
-  defp seed_messages(prompt, matches, existing_messages) do
+  defp matched_commands(matches), do: Enum.filter(matches, &(&1.kind == :command))
+  defp matched_tools(matches), do: Enum.filter(matches, &(&1.kind == :tool))
+
+  defp seed_messages(matches, existing_messages, user_content) do
     case existing_messages do
       [] ->
         [
           %{"role" => "system", "content" => system_prompt(matches)},
-          %{"role" => "user", "content" => prompt}
+          %{"role" => "user", "content" => user_content}
         ]
 
       messages ->
-        messages ++ [%{"role" => "user", "content" => prompt}]
+        messages ++ [%{"role" => "user", "content" => user_content}]
     end
+  end
+
+  defp user_content(prompt, opts) do
+    Multimodal.build_user_content(prompt, Keyword.get_values(opts, :image))
+  end
+
+  defp prepare_messages_for_primary(messages, config, opts) do
+    vision_backbone = VisionBackbone.resolve(opts, config)
+    VisionBackbone.prepare_messages(messages, vision_backbone)
+  end
+
+  defp permissions_snapshot(opts) do
+    context =
+      Permissions.new(
+        deny_tools: Keyword.get_values(opts, :deny_tool),
+        deny_prefixes: Keyword.get_values(opts, :deny_prefix)
+      )
+
+    %{
+      tool_policy: tool_policy(opts),
+      allow_shell: Keyword.get(opts, :allow_shell, false),
+      allow_write: Keyword.get(opts, :allow_write, false),
+      deny_tools: context.deny_tools |> MapSet.to_list() |> Enum.sort(),
+      deny_prefixes: Enum.sort(context.deny_prefixes)
+    }
+  end
+
+  defp permission_payload(%{} = permissions) do
+    %{
+      "tool_policy" => permissions.tool_policy |> to_string(),
+      "allow_shell" => permissions.allow_shell,
+      "allow_write" => permissions.allow_write,
+      "deny_tools" => permissions.deny_tools,
+      "deny_prefixes" => permissions.deny_prefixes
+    }
   end
 
   defp system_prompt(matches) do
@@ -592,7 +766,7 @@ defmodule ClawCode.Runtime do
     })
   end
 
-  defp provider_snapshot(config) do
+  defp provider_snapshot(config, vision_backbone) do
     %{
       provider: config.provider,
       base_url: config.base_url,
@@ -600,6 +774,7 @@ defmodule ClawCode.Runtime do
       model: config.model,
       api_key_present: is_binary(config.api_key) and config.api_key != ""
     }
+    |> maybe_put(:vision_backbone, vision_backbone, not is_nil(vision_backbone))
   end
 
   defp session_server_opts(opts) do

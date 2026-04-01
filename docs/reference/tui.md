@@ -5,6 +5,7 @@
 - [Goal](#goal)
 - [Correct Layering](#correct-layering)
 - [Minimal Client Contract](#minimal-client-contract)
+- [Operator Quickstart](#operator-quickstart)
 - [First UI Shape](#first-ui-shape)
 - [Non-Goals](#non-goals)
 
@@ -32,20 +33,62 @@ It stays intentionally small:
 - selected transcript and receipts
 - aggregate run counts plus selected-session run and receipt summaries
 - selected-session provider/model plus prompt/output summaries for faster failure inspection
+- compact `provider_health`, `input_modalities`, and `selected_health` summaries in the header/footer for faster operator triage
+- explicit `shell` and `write` access labels in the header so the active safety posture is visible before a run
 - optional `watch <seconds|on|off>` auto-refresh cadence for active monitoring
-- optional `follow <latest|running|latest-running|completed|failed|off>` auto-selection for active monitoring
+- optional `follow <latest|active|running|latest-running|completed|latest-completed|failed|latest-failed|off>` auto-selection for active monitoring
 - `active` alias support plus `focus active` / `focus all` monitoring presets
 - targeted `cancel active`, `cancel running`, and `cancel selected` intervention
 - daemon-backed `chat` and `resume`
+- repeated `--image PATH` support on in-client `chat` and `resume`, forwarded through the same daemon/runtime path
 - in-client `provider`, `model`, and `base-url` switching, including reset-to-default
 - in-client `probe` for the active provider configuration
 - `next` and `prev` session navigation
-- session filtering, substring `find`, and list limits inside the client
+- session filtering, root-wide substring `find`, and list limits inside the client
+- explicit `older` and `newer` paging across larger session roots without widening the daemon/runtime boundary
+- a bounded session window around the current selection so large filtered lists stay navigable with `next`, `prev`, and alias targets
 - transcript `find-msg`, `clear find-msg`, `next-hit`, and `prev-hit` inside the selected session
-- `open latest`, `open latest-completed`, `open running`, `open completed`, and `open failed`
-- targeted `resume latest ...` and `resume completed ...`
+- transcript tail rendering with absolute message numbers so excerpts stay intelligible as histories grow
+- `inspect selected`, `inspect active`, and `inspect latest-failed` as explicit inspection shortcuts over the same alias resolver used by `open`
+- `open latest`, `open active`, `open latest-running`, `open latest-completed`, and `open latest-failed`
+- targeted `resume selected ...`, `resume latest ...`, `resume active ...`, `resume latest-running ...`, `resume latest-completed ...`, and `resume latest-failed ...`
 - explicit `tools auto|on|off`
 - `open`, `cancel`, `refresh`, `help`, and `quit`
+
+## Operator Quickstart
+
+For the normal local loop:
+
+```bash
+./claw_code tui --provider generic
+```
+
+For split reasoning plus vision:
+
+```bash
+./claw_code tui --provider glm --model GLM-5.1 --vision-provider kimi --vision-model kimi-k2.5
+```
+
+Then use this sequence inside the client:
+
+```text
+focus active
+inspect failed
+chat --image ./diagram.png inspect this screenshot
+resume active --image ./diagram-2.png continue from the last tool result
+cancel active
+```
+
+That gives one compact flow for daily use:
+
+- `focus active` narrows the list to running work, enables `follow=running`, and turns on a 1s watch cadence.
+- `inspect failed` jumps directly to the latest failed session when you need to inspect the last breakage.
+- `chat --image ...` and `resume ... --image ...` let the TUI drive the same multimodal path as the CLI without inventing a second provider boundary.
+- start the client with `--vision-*` flags when the primary reasoning model should stay text-only and a separate vision-capable backbone should handle image understanding.
+- `older` and `newer` move the loaded page through larger session roots while keeping the same thin-client state path.
+- `resume selected ...`, `resume active ...`, or `resume latest-failed ...` keeps intervention on aliases instead of raw ids.
+- `cancel active` stops the currently running daemon-backed session without leaving the client.
+- the session list stays windowed around the current selection, and transcript excerpts keep absolute message positions, so a larger root does not force the client to dump every line at once.
 
 ## Minimal Client Contract
 
@@ -68,7 +111,7 @@ This keeps the UI replaceable while the daemon/runtime semantics harden.
 - left pane: recent sessions
 - center pane: transcript
 - right drawer: receipts, run state, and provider details
-- footer: prompt composer plus provider/model badges
+- footer: prompt composer plus provider/model/tool-policy/health badges
 
 The current in-repo TUI uses the same local control-plane boundaries and keeps the interaction model simple. Streaming and richer panes can come later.
 

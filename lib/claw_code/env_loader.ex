@@ -1,6 +1,8 @@
 defmodule ClawCode.EnvLoader do
   @default_files [".env.local", ".env"]
 
+  def default_files, do: @default_files
+
   def load(opts \\ []) do
     cwd = Keyword.get(opts, :cwd, File.cwd!())
     files = Keyword.get(opts, :files, @default_files)

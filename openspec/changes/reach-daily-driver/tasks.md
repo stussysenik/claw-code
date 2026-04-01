@@ -23,37 +23,42 @@
 - [x] Add stronger active-run and failed-run inspection for daemon-backed sessions.
 - [x] Prove resume/cancel/replay behavior across repeated shell exits and daemon restarts.
 - [x] Add one explicit stale-session recovery test and one stale-daemon recovery smoke path for the daily-driver checklist.
-- [ ] Tighten session-root hygiene so corrupted or partial state fails clearly and locally.
+- [x] Tighten session-root hygiene so corrupted or partial state fails clearly and locally.
 
 ## Phase 2: Provider Portability
 
 - [ ] Record live smoke evidence for GLM, Kimi, NIM, and one generic OpenAI-compatible endpoint.
 - [x] Add provider capability summaries so the operator can see tool support, auth mode, and endpoint identity at a glance.
 - [x] Harden compatibility fallback for partial OpenAI-compatible backends beyond the current `tools` retry.
-- [ ] Add one provider-matrix Ralph loop mode or checklist that can be run before calling a release candidate "daily-driver".
-- [ ] Document the preferred local setup patterns for `.env.local` without persisting secrets.
+- [x] Add provider-agnostic multimodal image-input support behind the OpenAI-compatible boundary, with explicit local-path validation, persisted session content, and inspectable fallback or failure behavior.
+- [x] Support split reasoning-plus-vision provider or model selection with replayable derived `vision_context` parts instead of forcing one model choice for every multimodal run.
+- [x] Expose multimodal preflight and capability visibility through `doctor`, `providers`, `probe`, and the TUI header so a vision-capable model can be checked before a longer run.
+- [x] Add an optional split vision-backbone path so image understanding can come from one provider or model and reasoning can stay on another without breaking replayability.
+- [x] Add one provider-matrix Ralph loop mode or checklist that can be run before calling a release candidate "daily-driver".
+- [x] Document the preferred local setup patterns for `.env.local` without persisting secrets.
 
 ## Phase 3: Tool And Adapter Reliability
 
-- [ ] Finish the shell/write safety story with clear receipts, policy display, and destructive-command evidence.
-- [ ] Add stronger timeout, exit-status, and output proof for Python, Lua, and Common Lisp adapters.
+- [x] Finish the shell/write safety story with clear receipts, policy display, and destructive-command evidence.
+- [x] Add stronger timeout, exit-status, and output proof for Python, Lua, and Common Lisp adapters.
 - [ ] Add one nontrivial Common Lisp-backed tool or evaluation path that proves the adapter is worth keeping.
 - [ ] Add native-ranker build and fallback evidence for the release checklist with native explicitly disabled.
 - [ ] Document when a new optimization belongs in Elixir first versus Zig.
 
 ## Phase 4: TUI Daily-Driver UX
 
-- [ ] Add tighter active-session shortcuts for resume, inspect, and intervention without widening the daemon boundary.
-- [ ] Improve at-a-glance provider, model, tool-policy, and health visibility in the TUI header/footer.
-- [ ] Add transcript/session views that still feel usable as the session root grows.
-- [ ] Add one compact "operator quickstart" flow in the TUI docs for normal daily use.
-- [ ] Keep all new TUI behavior behind the thin-client rule and prove it with tests.
+- [x] Add tighter active-session shortcuts for resume, inspect, and intervention without widening the daemon boundary.
+- [x] Improve at-a-glance provider, model, tool-policy, and health visibility in the TUI header/footer.
+- [x] Let TUI `chat` and `resume` forward multimodal image inputs through the same thin-client daemon/runtime boundary.
+- [x] Add transcript/session views that still feel usable as the session root grows.
+- [x] Add one compact "operator quickstart" flow in the TUI docs for normal daily use.
+- [x] Keep all new TUI behavior behind the thin-client rule and prove it with tests.
 
 ## Phase 5: Long-Run Operations
 
-- [ ] Add clearer daemon health reporting for busy, failed, stale, and partially recovered states.
-- [ ] Prove that repeated background session use does not silently lose session continuity.
-- [ ] Add better inspection for the most recent receipt, provider error, and stop reason of active or failed runs.
+- [x] Add clearer daemon health reporting for busy, failed, stale, and partially recovered states.
+- [x] Prove that repeated background session use does not silently lose session continuity.
+- [x] Add better inspection for the most recent receipt, provider error, and stop reason of active or failed runs.
 - [ ] Add recovery docs and smoke commands for the common break/fix paths.
 
 ## Phase 6: Release Confidence

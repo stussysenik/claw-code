@@ -30,7 +30,15 @@ defmodule ClawCode.TUITest do
       doctor: %{
         provider: "generic",
         model: %{value: "test-model"},
-        tool_policy: :disabled
+        tool_policy: :disabled,
+        shell_access: "disabled",
+        write_access: "disabled",
+        configured: true,
+        auth_mode: "optional",
+        tool_support: "compatible",
+        input_modalities: ["text", "image"],
+        missing: [],
+        base_url: %{value: "http://127.0.0.1:4000/v1"}
       },
       all_sessions: sessions,
       sessions: sessions,
@@ -62,12 +70,17 @@ defmodule ClawCode.TUITest do
 
     assert output =~ "# Claw Code TUI"
     assert output =~ "provider=generic"
+    assert output =~ "tools=disabled shell=disabled write=disabled"
+    assert output =~ "provider_health=ready auth=optional support=compatible missing=none"
+    assert output =~ "input_modalities=text, image"
     assert output =~ "selected=1/1"
+    assert output =~ "base_url=http://127.0.0.1:4000/v1"
     assert output =~ "runs=running:0 completed:1 failed:0"
-    assert output =~ "filter=all limit=8 query=-"
+    assert output =~ "filter=all limit=8 page=1-1/1 newer=no older=no query=-"
     assert output =~ "watch=off follow=off"
     assert output =~ "transcript_query=- hit=-"
     assert output =~ "selected_run=idle last_stop=completed"
+    assert output =~ "selected_health=completed"
     assert output =~ "selected_receipt=none"
     assert output =~ "started=- finished=2026-03-31T19:01:00Z last_stop=completed"
     assert output =~ "provider=glm model=glm-4.7"
@@ -76,6 +89,158 @@ defmodule ClawCode.TUITest do
     assert output =~ "last_receipt=none"
     assert output =~ "session-a 2026-03-31T19:00:00Z run=idle stop=completed provider=glm"
     assert output =~ "assistant: world"
+  end
+
+  test "render summarizes multimodal user content in the selected transcript" do
+    session = %{
+      "id" => "session-image",
+      "updated_at" => "2026-04-01T19:00:00Z",
+      "provider" => %{"provider" => "generic", "model" => "vision-model"},
+      "prompt" => "inspect screenshot",
+      "output" => "looks good",
+      "stop_reason" => "completed",
+      "run_state" => %{"status" => "idle", "last_stop_reason" => "completed"},
+      "messages" => [
+        %{
+          "role" => "user",
+          "content" => [
+            %{"type" => "text", "text" => "inspect screenshot"},
+            %{
+              "type" => "input_image",
+              "path" => "/tmp/example-diagram.png",
+              "mime_type" => "image/png"
+            }
+          ]
+        },
+        %{"role" => "assistant", "content" => "looks good"}
+      ],
+      "tool_receipts" => []
+    }
+
+    state = %State{
+      opts: [provider: "generic"],
+      daemon_status: %{"status" => "running"},
+      doctor: %{
+        provider: "generic",
+        model: %{value: "vision-model"},
+        tool_policy: :auto,
+        configured: true,
+        auth_mode: "optional",
+        tool_support: "compatible",
+        input_modalities: ["text", "image"],
+        missing: [],
+        base_url: %{value: "http://127.0.0.1:4000/v1"}
+      },
+      all_sessions: [session],
+      sessions: [session],
+      session_filter: :all,
+      session_limit: 8,
+      session_root: "/tmp/claw",
+      selected_session_id: "session-image",
+      selected_session: session
+    }
+
+    output = TUI.render(state)
+
+    assert output =~ "1. user: inspect screenshot [image:example-diagram.png]"
+    refute output =~ ~s(%{"type" => "input_image")
+  end
+
+  test "render windows the visible session list around the selected session" do
+    sessions =
+      Enum.map(1..12, fn index ->
+        %{
+          "id" => "session-#{String.pad_leading(Integer.to_string(index), 2, "0")}",
+          "updated_at" =>
+            "2026-04-01T17:#{String.pad_leading(Integer.to_string(index), 2, "0")}:00Z",
+          "provider" => %{"provider" => "generic", "model" => "test-model"},
+          "stop_reason" => "completed",
+          "messages" => [],
+          "tool_receipts" => []
+        }
+      end)
+
+    selected_session = Enum.at(sessions, 7)
+
+    state = %State{
+      opts: [provider: "generic"],
+      daemon_status: %{"status" => "running"},
+      doctor: %{
+        provider: "generic",
+        model: %{value: "test-model"},
+        tool_policy: :auto,
+        configured: true,
+        auth_mode: "optional",
+        tool_support: "compatible",
+        missing: [],
+        base_url: %{value: "http://127.0.0.1:4000/v1"}
+      },
+      all_sessions: sessions,
+      sessions: sessions,
+      session_filter: :all,
+      session_limit: 20,
+      session_root: System.tmp_dir!(),
+      selected_session_id: selected_session["id"],
+      selected_session: selected_session
+    }
+
+    output = TUI.render(state)
+
+    assert output =~ "selected=8/12"
+    assert output =~ "  showing 4-11/12 sessions"
+    assert output =~ "> 8. session-08"
+    assert output =~ "  11. session-11"
+    refute output =~ "  1. session-01"
+    refute output =~ "  12. session-12"
+  end
+
+  test "render shows transcript tail windows with absolute message indices" do
+    messages =
+      Enum.map(1..8, fn index ->
+        %{
+          "role" => if(rem(index, 2) == 0, do: "assistant", else: "user"),
+          "content" => "message-#{index}"
+        }
+      end)
+
+    session = %{
+      "id" => "session-transcript",
+      "provider" => %{"provider" => "generic", "model" => "test-model"},
+      "prompt" => "inspect transcript tail",
+      "output" => "ok",
+      "stop_reason" => "completed",
+      "messages" => messages,
+      "tool_receipts" => []
+    }
+
+    state = %State{
+      opts: [provider: "generic"],
+      daemon_status: %{"status" => "running"},
+      doctor: %{
+        provider: "generic",
+        model: %{value: "test-model"},
+        tool_policy: :auto,
+        configured: true,
+        auth_mode: "optional",
+        tool_support: "compatible",
+        missing: [],
+        base_url: %{value: "http://127.0.0.1:4000/v1"}
+      },
+      all_sessions: [session],
+      sessions: [session],
+      session_filter: :all,
+      session_limit: 8,
+      session_root: System.tmp_dir!(),
+      selected_session_id: "session-transcript",
+      selected_session: session
+    }
+
+    output = TUI.render(state)
+
+    assert output =~ "  showing 3-8/8 messages"
+    assert output =~ "  3. user: message-3"
+    assert output =~ "  8. assistant: message-8"
+    refute output =~ "  1. user: message-1"
   end
 
   test "render surfaces running counts and last receipt summary" do
@@ -103,7 +268,16 @@ defmodule ClawCode.TUITest do
     state = %State{
       opts: [provider: "generic"],
       daemon_status: %{"status" => "running"},
-      doctor: %{provider: "generic", model: %{value: "test-model"}, tool_policy: :auto},
+      doctor: %{
+        provider: "generic",
+        model: %{value: "test-model"},
+        tool_policy: :auto,
+        configured: false,
+        auth_mode: "optional",
+        tool_support: "compatible",
+        missing: [:base_url, :model],
+        base_url: %{value: nil}
+      },
       all_sessions: [
         running_session,
         %{
@@ -129,14 +303,205 @@ defmodule ClawCode.TUITest do
 
     output = TUI.render(state)
 
+    assert output =~
+             "provider_health=missing auth=optional support=compatible missing=base_url, model"
+
     assert output =~ "runs=running:1 completed:1 failed:1"
     assert output =~ "selected_run=running since=2026-03-31T20:00:00Z"
+    assert output =~ "selected_health=running"
     assert output =~ "selected_receipt=shell:ok:42ms"
     assert output =~ "provider=nim model=nvidia/model"
     assert output =~ "prompt=keep monitoring"
     assert output =~ "output=still working"
     assert output =~ "last_receipt=shell ok 42ms 2026-03-31T20:00:02Z"
     assert output =~ "1. shell ok 42ms 2026-03-31T20:00:02Z"
+  end
+
+  test "render surfaces failed selected-session health details" do
+    failed_session = %{
+      "id" => "session-failed",
+      "provider" => %{"provider" => "generic", "model" => "local-model"},
+      "prompt" => "check failing provider",
+      "output" => "provider request failed with status 401: unauthorized",
+      "stop_reason" => "provider_error",
+      "run_state" => %{
+        "status" => "idle",
+        "finished_at" => "2026-04-01T17:00:00Z",
+        "last_stop_reason" => "provider_error"
+      },
+      "messages" => [],
+      "tool_receipts" => []
+    }
+
+    state = %State{
+      opts: [provider: "generic"],
+      daemon_status: %{"status" => "running"},
+      doctor: %{
+        provider: "generic",
+        model: %{value: "local-model"},
+        tool_policy: :auto,
+        configured: true,
+        auth_mode: "optional",
+        tool_support: "compatible",
+        missing: [],
+        base_url: %{value: "http://127.0.0.1:4000/v1"}
+      },
+      all_sessions: [failed_session],
+      sessions: [failed_session],
+      session_filter: :failed,
+      session_limit: 8,
+      session_root: System.tmp_dir!(),
+      selected_session_id: "session-failed",
+      selected_session: failed_session
+    }
+
+    output = TUI.render(state)
+
+    assert output =~ "provider_health=ready auth=optional support=compatible missing=none"
+
+    assert output =~
+             "selected_health=failed stop=provider_error detail=provider request failed with status 401: unauthorized"
+  end
+
+  test "render surfaces daemon health and recent issue summaries" do
+    selected_session = %{
+      "id" => "session-running",
+      "provider" => %{"provider" => "glm", "model" => "glm-4.7"},
+      "prompt" => "keep monitoring",
+      "output" => "still working",
+      "stop_reason" => "running",
+      "run_state" => %{"status" => "running", "started_at" => "2026-04-01T00:02:00Z"},
+      "messages" => [],
+      "tool_receipts" => []
+    }
+
+    state = %State{
+      opts: [provider: "generic"],
+      daemon_status: %{
+        "status" => "running",
+        "health" => %{
+          "signals" => ["busy", "failed", "partially_recovered"],
+          "counts" => %{
+            "total" => 3,
+            "running" => 1,
+            "completed" => 0,
+            "failed" => 1,
+            "recovered" => 1,
+            "invalid" => 0
+          },
+          "latest_running" => %{
+            "id" => "session-running",
+            "provider" => "glm",
+            "stop_reason" => "running",
+            "run_status" => "running"
+          },
+          "latest_failed" => %{
+            "id" => "session-failed",
+            "provider" => "generic",
+            "stop_reason" => "provider_error",
+            "detail" => "provider request failed with status 401: unauthorized",
+            "last_receipt" => %{
+              "tool" => "shell",
+              "status" => "ok",
+              "duration_ms" => 42,
+              "started_at" => "2026-04-01T00:03:00Z"
+            }
+          },
+          "latest_recovered" => %{
+            "id" => "session-recovered",
+            "provider" => "nim",
+            "stop_reason" => "run_interrupted"
+          }
+        }
+      },
+      doctor: %{
+        provider: "generic",
+        model: %{value: "local-model"},
+        tool_policy: :auto,
+        configured: true,
+        auth_mode: "optional",
+        tool_support: "compatible",
+        missing: [],
+        base_url: %{value: "http://127.0.0.1:4000/v1"}
+      },
+      all_sessions: [selected_session],
+      sessions: [selected_session],
+      session_filter: :all,
+      session_limit: 8,
+      session_root: System.tmp_dir!(),
+      selected_session_id: "session-running",
+      selected_session: selected_session
+    }
+
+    output = TUI.render(state)
+
+    assert output =~ "daemon_health=busy, failed, partially_recovered"
+
+    assert output =~
+             "daemon_sessions=total:3 running:1 completed:0 failed:1 recovered:1 invalid:0"
+
+    assert output =~ "daemon_active=session-running provider=glm stop=running run=running"
+
+    assert output =~
+             "daemon_attention=session-failed provider=generic stop=provider_error receipt=shell:ok:42ms"
+
+    assert output =~
+             "detail=provider request failed with status 401: unauthorized"
+
+    assert output =~ "daemon_recovered=session-recovered provider=nim stop=run_interrupted"
+  end
+
+  test "help and footer advertise the full session-target alias set" do
+    state = %State{
+      opts: [provider: "generic"],
+      daemon_status: %{"status" => "running"},
+      doctor: %{
+        provider: "generic",
+        model: %{value: "test-model"},
+        tool_policy: :auto,
+        configured: true,
+        auth_mode: "optional",
+        tool_support: "compatible",
+        missing: [],
+        base_url: %{value: "http://127.0.0.1:4000/v1"}
+      },
+      all_sessions: [],
+      sessions: [],
+      session_filter: :all,
+      session_limit: 8,
+      session_root: System.tmp_dir!(),
+      selected_session_id: nil,
+      selected_session: nil
+    }
+
+    output = TUI.render(state)
+
+    assert output =~ "chat [--image PATH]... <prompt>"
+    assert output =~ "resume [--image PATH]... <prompt>"
+
+    assert output =~
+             "resume <selected|n|id|latest|active|running|latest-running|completed|latest-completed|failed|latest-failed> [--image PATH]... <prompt>"
+
+    assert output =~
+             "inspect [selected|n|id|latest|active|running|latest-running|completed|latest-completed|failed|latest-failed]"
+
+    assert output =~
+             "open <n|id|latest|active|running|latest-running|completed|latest-completed|failed|latest-failed>"
+
+    assert output =~
+             "cancel [selected|n|id|latest|active|running|latest-running|completed|latest-completed|failed|latest-failed]"
+
+    assert output =~
+             "follow <latest|active|running|latest-running|completed|latest-completed|failed|latest-failed|off>"
+
+    assert output =~ "older | newer"
+
+    {:continue, help_state} = TUI.apply_command(state, "help")
+    assert help_state.notice =~ "latest-failed"
+    assert help_state.notice =~ "latest-completed"
+    assert help_state.notice =~ "latest-running"
+    assert help_state.notice =~ "older"
+    assert help_state.notice =~ "newer"
   end
 
   test "watch command updates refresh cadence" do
@@ -426,6 +791,76 @@ defmodule ClawCode.TUITest do
     assert next_state.notice =~ "Opened session session-running"
   end
 
+  test "inspect reopens the currently selected session" do
+    sessions = [
+      %{
+        "id" => "session-completed",
+        "stop_reason" => "completed",
+        "messages" => [],
+        "tool_receipts" => []
+      },
+      %{
+        "id" => "session-running",
+        "stop_reason" => "running",
+        "run_state" => %{"status" => "running"},
+        "messages" => [],
+        "tool_receipts" => []
+      }
+    ]
+
+    state = %State{
+      opts: [],
+      daemon_status: %{"status" => "running"},
+      doctor: %{provider: "generic", model: %{value: "test-model"}, tool_policy: :auto},
+      all_sessions: sessions,
+      sessions: sessions,
+      session_filter: :all,
+      session_limit: 8,
+      session_root: System.tmp_dir!(),
+      selected_session_id: "session-completed",
+      selected_session: nil
+    }
+
+    {:continue, next_state} = TUI.apply_command(state, "inspect")
+    assert next_state.selected_session_id == "session-completed"
+    assert next_state.notice =~ "Opened session session-completed"
+  end
+
+  test "inspect active selects the running session" do
+    sessions = [
+      %{
+        "id" => "session-completed",
+        "stop_reason" => "completed",
+        "messages" => [],
+        "tool_receipts" => []
+      },
+      %{
+        "id" => "session-running",
+        "stop_reason" => "running",
+        "run_state" => %{"status" => "running"},
+        "messages" => [],
+        "tool_receipts" => []
+      }
+    ]
+
+    state = %State{
+      opts: [],
+      daemon_status: %{"status" => "running"},
+      doctor: %{provider: "generic", model: %{value: "test-model"}, tool_policy: :auto},
+      all_sessions: sessions,
+      sessions: sessions,
+      session_filter: :all,
+      session_limit: 8,
+      session_root: System.tmp_dir!(),
+      selected_session_id: "session-completed",
+      selected_session: nil
+    }
+
+    {:continue, next_state} = TUI.apply_command(state, "inspect active")
+    assert next_state.selected_session_id == "session-running"
+    assert next_state.notice =~ "Opened session session-running"
+  end
+
   test "tools command updates local tool mode" do
     state = %State{
       opts: [provider: "generic"],
@@ -536,6 +971,24 @@ defmodule ClawCode.TUITest do
     assert next_state.notice =~ "Probe missing_config"
   end
 
+  test "chat command rejects a missing image value" do
+    state = %State{
+      opts: [],
+      daemon_status: %{"status" => "running"},
+      doctor: %{provider: "generic", model: %{value: "test-model"}, tool_policy: :auto},
+      all_sessions: [],
+      sessions: [],
+      session_filter: :all,
+      session_limit: 8,
+      session_root: System.tmp_dir!(),
+      selected_session_id: nil,
+      selected_session: nil
+    }
+
+    {:continue, next_state} = TUI.apply_command(state, "chat --image")
+    assert next_state.notice =~ "Image path is required"
+  end
+
   test "resume requires a selected session" do
     state = %State{
       opts: [],
@@ -581,6 +1034,333 @@ defmodule ClawCode.TUITest do
     assert next_state.notice =~ "Prompt is required"
   end
 
+  test "resume selected resumes the selected daemon session" do
+    daemon_root = tmp_path("tui-resume-selected")
+    session_root = tmp_path("tui-resume-selected-sessions")
+
+    File.rm_rf(daemon_root)
+    File.rm_rf(session_root)
+
+    {base_url, listener, server} =
+      start_stub_server([
+        Jason.encode!(%{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "first reply"}}]
+        }),
+        Jason.encode!(%{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "second reply"}}]
+        })
+      ])
+
+    task = start_daemon(daemon_root, session_root: session_root)
+    session_id = "tui-resume-selected-session"
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+      _ = Daemon.stop(daemon_root: daemon_root)
+      if Process.alive?(task.pid), do: Process.exit(task.pid, :kill)
+      File.rm_rf(daemon_root)
+      File.rm_rf(session_root)
+    end)
+
+    assert {:ok, %Runtime.Result{} = first_result} =
+             Daemon.chat("first prompt",
+               daemon_root: daemon_root,
+               session_root: session_root,
+               provider: "generic",
+               base_url: base_url,
+               api_key: "test-key",
+               model: "test-model",
+               session_id: session_id,
+               native: false
+             )
+
+    assert first_result.session_id == session_id
+
+    state =
+      TUI.build_state(
+        [
+          daemon_root: daemon_root,
+          session_root: session_root,
+          provider: "generic",
+          base_url: base_url,
+          api_key: "test-key",
+          model: "test-model",
+          native: false
+        ],
+        %{"status" => "running", "session_root" => session_root},
+        nil
+      )
+
+    assert state.selected_session_id == session_id
+
+    {:continue, next_state} = TUI.apply_command(state, "resume selected keep going")
+
+    assert next_state.selected_session_id == session_id
+    assert next_state.notice =~ "Completed completed for #{session_id}."
+
+    assert {:ok, session} = SessionStore.fetch(session_id, root: session_root)
+
+    assert Enum.any?(
+             session["messages"],
+             &(&1["role"] == "user" and &1["content"] == "keep going")
+           )
+
+    assert session["output"] == "second reply"
+  end
+
+  test "chat command forwards image inputs through the daemon boundary" do
+    daemon_root = tmp_path("tui-chat-image")
+    session_root = tmp_path("tui-chat-image-sessions")
+
+    File.rm_rf(daemon_root)
+    File.rm_rf(session_root)
+    File.mkdir_p!(session_root)
+
+    image_path = write_png(session_root, "chat-image.png")
+
+    {base_url, listener, server} =
+      start_stub_server(
+        [
+          Jason.encode!(%{
+            "choices" => [%{"message" => %{"role" => "assistant", "content" => "vision reply"}}]
+          })
+        ],
+        capture_requests: true
+      )
+
+    task = start_daemon(daemon_root, session_root: session_root)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+      _ = Daemon.stop(daemon_root: daemon_root)
+      if Process.alive?(task.pid), do: Process.exit(task.pid, :kill)
+      File.rm_rf(daemon_root)
+      File.rm_rf(session_root)
+    end)
+
+    state =
+      TUI.build_state(
+        [
+          daemon_root: daemon_root,
+          session_root: session_root,
+          provider: "generic",
+          base_url: base_url,
+          api_key: "test-key",
+          model: "test-model",
+          native: false
+        ],
+        %{"status" => "running", "session_root" => session_root},
+        nil
+      )
+
+    {:continue, next_state} =
+      TUI.apply_command(state, "chat --image #{image_path} describe this screenshot")
+
+    assert next_state.notice =~ "Completed completed for "
+    assert_receive {:request, request}, 1_000
+    assert request =~ "\"image_url\""
+    assert request =~ "data:image/png;base64,"
+    assert request =~ "describe this screenshot"
+
+    assert {:ok, session} = SessionStore.fetch(next_state.selected_session_id, root: session_root)
+
+    assert Enum.at(session["messages"], 1) == %{
+             "role" => "user",
+             "content" => [
+               %{"type" => "text", "text" => "describe this screenshot"},
+               %{
+                 "type" => "input_image",
+                 "path" => image_path,
+                 "mime_type" => "image/png"
+               }
+             ]
+           }
+
+    assert session["output"] == "vision reply"
+  end
+
+  test "resume selected forwards image inputs and appends replayable multimodal content" do
+    daemon_root = tmp_path("tui-resume-image")
+    session_root = tmp_path("tui-resume-image-sessions")
+
+    File.rm_rf(daemon_root)
+    File.rm_rf(session_root)
+    File.mkdir_p!(session_root)
+
+    image_path = write_png(session_root, "resume-image.png")
+
+    {base_url, listener, server} =
+      start_stub_server(
+        [
+          Jason.encode!(%{
+            "choices" => [%{"message" => %{"role" => "assistant", "content" => "first reply"}}]
+          }),
+          Jason.encode!(%{
+            "choices" => [%{"message" => %{"role" => "assistant", "content" => "second reply"}}]
+          })
+        ],
+        capture_requests: true
+      )
+
+    task = start_daemon(daemon_root, session_root: session_root)
+    session_id = "tui-resume-image-session"
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+      _ = Daemon.stop(daemon_root: daemon_root)
+      if Process.alive?(task.pid), do: Process.exit(task.pid, :kill)
+      File.rm_rf(daemon_root)
+      File.rm_rf(session_root)
+    end)
+
+    assert {:ok, %Runtime.Result{} = first_result} =
+             Daemon.chat("first prompt",
+               daemon_root: daemon_root,
+               session_root: session_root,
+               provider: "generic",
+               base_url: base_url,
+               api_key: "test-key",
+               model: "test-model",
+               session_id: session_id,
+               native: false
+             )
+
+    assert first_result.session_id == session_id
+    assert_receive {:request, _first_request}, 1_000
+
+    state =
+      TUI.build_state(
+        [
+          daemon_root: daemon_root,
+          session_root: session_root,
+          provider: "generic",
+          base_url: base_url,
+          api_key: "test-key",
+          model: "test-model",
+          native: false
+        ],
+        %{"status" => "running", "session_root" => session_root},
+        nil
+      )
+
+    assert state.selected_session_id == session_id
+
+    {:continue, next_state} =
+      TUI.apply_command(state, "resume selected --image #{image_path} compare this screenshot")
+
+    assert next_state.selected_session_id == session_id
+    assert next_state.notice =~ "Completed completed for #{session_id}."
+
+    assert_receive {:request, request}, 1_000
+    assert request =~ "\"image_url\""
+    assert request =~ "data:image/png;base64,"
+    assert request =~ "compare this screenshot"
+
+    assert {:ok, session} = SessionStore.fetch(session_id, root: session_root)
+
+    assert Enum.at(session["messages"], 3) == %{
+             "role" => "user",
+             "content" => [
+               %{"type" => "text", "text" => "compare this screenshot"},
+               %{
+                 "type" => "input_image",
+                 "path" => image_path,
+                 "mime_type" => "image/png"
+               }
+             ]
+           }
+
+    assert session["output"] == "second reply"
+  end
+
+  test "resume selected accepts --image and persists multimodal user content" do
+    daemon_root = tmp_path("tui-resume-selected-image")
+    session_root = tmp_path("tui-resume-selected-image-sessions")
+
+    File.rm_rf(daemon_root)
+    File.rm_rf(session_root)
+    File.mkdir_p!(session_root)
+
+    image_path = write_png(session_root, "resume-image.png")
+
+    {base_url, listener, server} =
+      start_stub_server([
+        Jason.encode!(%{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "first reply"}}]
+        }),
+        Jason.encode!(%{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "vision reply"}}]
+        })
+      ])
+
+    task = start_daemon(daemon_root, session_root: session_root)
+    session_id = "tui-resume-selected-image-session"
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+      _ = Daemon.stop(daemon_root: daemon_root)
+      if Process.alive?(task.pid), do: Process.exit(task.pid, :kill)
+      File.rm_rf(daemon_root)
+      File.rm_rf(session_root)
+    end)
+
+    assert {:ok, %Runtime.Result{}} =
+             Daemon.chat("first prompt",
+               daemon_root: daemon_root,
+               session_root: session_root,
+               provider: "generic",
+               base_url: base_url,
+               api_key: "test-key",
+               model: "test-model",
+               session_id: session_id,
+               native: false
+             )
+
+    state =
+      TUI.build_state(
+        [
+          daemon_root: daemon_root,
+          session_root: session_root,
+          provider: "generic",
+          base_url: base_url,
+          api_key: "test-key",
+          model: "test-model",
+          native: false
+        ],
+        %{"status" => "running", "session_root" => session_root},
+        nil
+      )
+
+    assert state.selected_session_id == session_id
+
+    {:continue, next_state} =
+      TUI.apply_command(state, "resume selected --image #{image_path} compare this screenshot")
+
+    assert next_state.selected_session_id == session_id
+    assert next_state.notice =~ "Completed completed for #{session_id}."
+
+    assert {:ok, session} = SessionStore.fetch(session_id, root: session_root)
+
+    assert Enum.any?(
+             session["messages"],
+             &(&1["role"] == "user" and
+                 &1["content"] == [
+                   %{"type" => "text", "text" => "compare this screenshot"},
+                   %{
+                     "type" => "input_image",
+                     "path" => Path.expand(image_path),
+                     "mime_type" => "image/png"
+                   }
+                 ])
+           )
+
+    assert session["output"] == "vision reply"
+  end
+
   test "next and prev commands move the selected session" do
     sessions = [
       %{"id" => "session-a", "messages" => [], "tool_receipts" => []},
@@ -611,6 +1391,59 @@ defmodule ClawCode.TUITest do
 
     {:continue, prev_state} = TUI.apply_command(next_state, "prev")
     assert prev_state.selected_session_id == "session-b"
+  end
+
+  test "older and newer page through larger session roots" do
+    root = Path.join(System.tmp_dir!(), "claw-code-tui-paging-#{SessionStore.new_id()}")
+    File.rm_rf(root)
+
+    on_exit(fn -> File.rm_rf(root) end)
+
+    Enum.each(1..5, fn index ->
+      SessionStore.save(
+        %{
+          id: "session-#{index}",
+          prompt: "prompt-#{index}",
+          stop_reason: "completed",
+          messages: []
+        },
+        root: root
+      )
+
+      Process.sleep(1_000)
+    end)
+
+    state =
+      TUI.build_state(
+        [provider: "generic", limit: 2],
+        %{"status" => "running", "session_root" => root},
+        nil
+      )
+
+    assert state.session_offset == 0
+    assert state.session_total == 5
+    assert state.older_sessions_available == true
+    assert state.newer_sessions_available == false
+    assert Enum.map(state.sessions, & &1["id"]) == ["session-5", "session-4"]
+    assert TUI.render(state) =~ "page=1-2/5 newer=no older=yes"
+
+    {:continue, older_state} = TUI.apply_command(state, "older")
+
+    assert older_state.session_offset == 2
+    assert older_state.session_total == 5
+    assert older_state.selected_session_id == "session-3"
+    assert older_state.notice =~ "Older sessions"
+    assert Enum.map(older_state.sessions, & &1["id"]) == ["session-3", "session-2"]
+    assert TUI.render(older_state) =~ "selected=3/5"
+    assert TUI.render(older_state) =~ "page=3-4/5 newer=yes older=yes"
+    assert TUI.render(older_state) =~ "showing 3-4/5 sessions"
+
+    {:continue, newest_state} = TUI.apply_command(older_state, "newer")
+
+    assert newest_state.session_offset == 0
+    assert newest_state.selected_session_id == "session-5"
+    assert newest_state.notice =~ "Newer sessions"
+    assert Enum.map(newest_state.sessions, & &1["id"]) == ["session-5", "session-4"]
   end
 
   test "open aliases select latest running completed and failed sessions" do
@@ -728,12 +1561,46 @@ defmodule ClawCode.TUITest do
 
     {:continue, found_state} = TUI.apply_command(state, "find beta")
     assert found_state.session_query == "beta"
-    assert length(found_state.all_sessions) == 2
+    assert length(found_state.all_sessions) == 1
     assert Enum.map(found_state.sessions, & &1["id"]) == ["session-beta"]
 
     {:continue, cleared_state} = TUI.apply_command(found_state, "clear find")
     assert cleared_state.session_query == nil
     assert length(cleared_state.sessions) == 2
+  end
+
+  test "find searches beyond the current session limit" do
+    root = Path.join(System.tmp_dir!(), "claw-code-tui-find-root-#{SessionStore.new_id()}")
+    File.rm_rf(root)
+
+    on_exit(fn -> File.rm_rf(root) end)
+
+    SessionStore.save(%{id: "session-alpha", prompt: "review alpha repo", messages: []},
+      root: root
+    )
+
+    SessionStore.save(%{id: "session-beta", prompt: "inspect beta service", messages: []},
+      root: root
+    )
+
+    state =
+      TUI.build_state(
+        [provider: "generic", limit: 1],
+        %{"status" => "running", "session_root" => root},
+        nil
+      )
+
+    assert Enum.map(state.sessions, & &1["id"]) == ["session-beta"]
+
+    {:continue, found_state} = TUI.apply_command(state, "find alpha")
+
+    assert found_state.session_query == "alpha"
+    assert Enum.map(found_state.sessions, & &1["id"]) == ["session-alpha"]
+    assert found_state.selected_session_id == "session-alpha"
+
+    {:continue, cleared_state} = TUI.apply_command(found_state, "clear find")
+    assert cleared_state.session_query == nil
+    assert Enum.map(cleared_state.sessions, & &1["id"]) == ["session-beta"]
   end
 
   test "find-msg and clear find-msg update transcript search state" do
@@ -829,21 +1696,23 @@ defmodule ClawCode.TUITest do
     task
   end
 
-  defp start_stub_server(responses) do
+  defp start_stub_server(responses, opts \\ []) do
     {:ok, listener} =
       :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true])
 
     {:ok, port} = :inet.port(listener)
+    request_caller = self()
+    capture_requests? = Keyword.get(opts, :capture_requests, false)
 
     server =
       spawn_link(fn ->
-        serve_responses(listener, responses)
+        serve_responses(listener, responses, request_caller, capture_requests?)
       end)
 
     {"http://127.0.0.1:#{port}/v1", listener, server}
   end
 
-  defp serve_responses(listener, responses) do
+  defp serve_responses(listener, responses, request_caller, capture_requests?) do
     Enum.each(responses, fn response ->
       {body, delay_ms} =
         case response do
@@ -852,7 +1721,12 @@ defmodule ClawCode.TUITest do
         end
 
       {:ok, socket} = :gen_tcp.accept(listener)
-      {:ok, _request} = read_request(socket, "")
+      {:ok, request} = read_request(socket, "")
+
+      if capture_requests? do
+        send(request_caller, {:request, request})
+      end
+
       Process.sleep(delay_ms)
       :ok = :gen_tcp.send(socket, http_response(body))
       :gen_tcp.close(socket)
@@ -923,5 +1797,18 @@ defmodule ClawCode.TUITest do
 
   defp tmp_path(label) do
     Path.join(System.tmp_dir!(), "claw-code-#{label}-#{SessionStore.new_id()}")
+  end
+
+  defp write_png(root, name) do
+    path = Path.join(root, name)
+
+    File.write!(
+      path,
+      Base.decode64!(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7+X3cAAAAASUVORK5CYII="
+      )
+    )
+
+    path
   end
 end

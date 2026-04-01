@@ -89,6 +89,9 @@ Required outputs:
 - live smoke evidence for GLM, Kimi, NIM, and one generic endpoint
 - provider profile docs for auth, defaults, and weird compatibility behavior
 - stronger fallback behavior for endpoints that partially implement OpenAI compatibility
+- provider-agnostic multimodal image input with replayable local-path persistence and explicit validation
+- an optional split vision backbone so image understanding can come from one provider/model while reasoning stays on another
+- multimodal preflight and capability visibility through `doctor`, `providers`, `probe`, and the TUI header
 - clearer provider identity and capability display in CLI and TUI
 
 Suggested Ralph loop:
@@ -112,6 +115,7 @@ Required outputs:
 
 - hardened shell/write policy receipts
 - explicit subprocess failure and timeout evidence for Python, Lua, and Common Lisp
+- runtime adapter receipts that preserve engine, invocation, exit status, and merged output under both failure and timeout
 - native ranker build, disable, and fallback proof
 - one documented policy for when Zig is worth adding to a feature
 
@@ -136,6 +140,7 @@ Required outputs:
 
 - active-run shortcuts that reduce command ceremony
 - tighter provider/model/tool-policy visibility
+- multimodal `chat` and `resume` forwarding that stays inside the thin-client daemon/runtime path
 - session and transcript navigation that stays fast as the session root grows
 - a small set of keyboard-friendly or alias-friendly workflows that cover most daily use
 

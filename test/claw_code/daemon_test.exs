@@ -107,6 +107,40 @@ defmodule ClawCode.DaemonTest do
              "daemon default root"
   end
 
+  test "chat rejects a conflicting client session_root instead of silently forking state" do
+    daemon_root = tmp_path("daemon-root-authority")
+    session_root = tmp_path("daemon-root-authority-sessions")
+    conflicting_root = tmp_path("daemon-root-authority-conflict")
+
+    File.rm_rf(daemon_root)
+    File.rm_rf(session_root)
+    File.rm_rf(conflicting_root)
+
+    task = start_daemon(daemon_root, session_root: session_root)
+
+    on_exit(fn ->
+      _ = Daemon.stop(daemon_root: daemon_root)
+      if Process.alive?(task.pid), do: Process.exit(task.pid, :kill)
+    end)
+
+    assert {:error, message} =
+             Daemon.chat("hello from daemon",
+               daemon_root: daemon_root,
+               session_root: conflicting_root,
+               provider: "generic",
+               base_url: "http://127.0.0.1:1/v1",
+               api_key: "test-key",
+               model: "test-model",
+               native: false
+             )
+
+    assert message =~ "Daemon session root mismatch"
+    assert message =~ session_root
+    assert message =~ conflicting_root
+    assert SessionStore.count(root: session_root) == 0
+    assert SessionStore.count(root: conflicting_root) == 0
+  end
+
   test "cancel_session cancels an active daemon run" do
     daemon_root = tmp_path("daemon-cancel")
     session_root = tmp_path("daemon-cancel-sessions")
@@ -161,6 +195,50 @@ defmodule ClawCode.DaemonTest do
 
     assert {:ok, %Runtime.Result{} = result} = Task.await(chat_task, 2_000)
     assert result.stop_reason == "cancelled"
+  end
+
+  test "cancel_session rejects a conflicting client session_root" do
+    daemon_root = tmp_path("daemon-cancel-root-authority")
+    session_root = tmp_path("daemon-cancel-root-authority-sessions")
+    conflicting_root = tmp_path("daemon-cancel-root-authority-conflict")
+    session_id = "daemon-root-authority-running"
+
+    File.rm_rf(daemon_root)
+    File.rm_rf(session_root)
+    File.rm_rf(conflicting_root)
+
+    task = start_daemon(daemon_root, session_root: session_root)
+
+    on_exit(fn ->
+      _ = Daemon.stop(daemon_root: daemon_root)
+      if Process.alive?(task.pid), do: Process.exit(task.pid, :kill)
+    end)
+
+    SessionStore.save(
+      %{
+        id: session_id,
+        prompt: "hello",
+        messages: [],
+        stop_reason: "running",
+        run_state: %{"status" => "running", "started_at" => "2026-04-01T00:00:00Z"}
+      },
+      root: session_root
+    )
+
+    assert {:error, message} =
+             Daemon.cancel_session(session_id,
+               daemon_root: daemon_root,
+               session_root: conflicting_root
+             )
+
+    assert message =~ "Daemon session root mismatch"
+    assert message =~ session_root
+    assert message =~ conflicting_root
+
+    assert get_in(SessionStore.load(session_id, root: session_root), ["run_state", "status"]) ==
+             "running"
+
+    assert SessionStore.count(root: conflicting_root) == 0
   end
 
   test "chat resumes an existing session through the daemon" do
@@ -386,6 +464,103 @@ defmodule ClawCode.DaemonTest do
     assert {:ok, %{"status" => "running"} = status} = Daemon.status(daemon_root: daemon_root)
     assert status["session_root"] == session_root
     refute status["token"] == "stale-token"
+  end
+
+  test "daemon startup reconciles abandoned running sessions before health reporting" do
+    daemon_root = tmp_path("daemon-health")
+    session_root = tmp_path("daemon-health-sessions")
+
+    File.rm_rf(daemon_root)
+    File.rm_rf(session_root)
+
+    SessionStore.save(
+      %{
+        id: "session-running",
+        stop_reason: "running",
+        provider: %{"provider" => "glm", "model" => "GLM-4.7"},
+        run_state: %{"status" => "running", "started_at" => "2026-04-01T00:01:00Z"},
+        output: "still running",
+        messages: [],
+        tool_receipts: []
+      },
+      root: session_root
+    )
+
+    SessionStore.save(
+      %{
+        id: "session-failed",
+        stop_reason: "provider_error",
+        provider: %{"provider" => "generic", "model" => "test-model"},
+        run_state: %{
+          "status" => "idle",
+          "finished_at" => "2026-04-01T00:03:10Z",
+          "last_stop_reason" => "provider_error"
+        },
+        output: "provider request failed with status 401: unauthorized",
+        messages: [],
+        tool_receipts: [
+          %{
+            "tool_name" => "shell",
+            "status" => "ok",
+            "duration_ms" => 42,
+            "started_at" => "2026-04-01T00:03:00Z"
+          }
+        ]
+      },
+      root: session_root
+    )
+
+    SessionStore.save(
+      %{
+        id: "session-recovered",
+        stop_reason: "run_interrupted",
+        provider: %{"provider" => "nim", "model" => "meta/llama-3.1-8b-instruct"},
+        run_state: %{
+          "status" => "idle",
+          "finished_at" => "2026-04-01T00:05:00Z",
+          "last_stop_reason" => "run_interrupted"
+        },
+        output: "Session run interrupted during recovery.",
+        messages: [],
+        tool_receipts: []
+      },
+      root: session_root
+    )
+
+    task = start_daemon(daemon_root, session_root: session_root)
+
+    on_exit(fn ->
+      _ = Daemon.stop(daemon_root: daemon_root)
+      if Process.alive?(task.pid), do: Process.exit(task.pid, :kill)
+    end)
+
+    assert {:ok, %{"status" => "running", "health" => health} = status} =
+             Daemon.status(daemon_root: daemon_root)
+
+    assert status["session_root"] == session_root
+    assert health["signals"] == ["failed", "partially_recovered"]
+
+    assert health["counts"] == %{
+             "completed" => 0,
+             "failed" => 1,
+             "invalid" => 0,
+             "recovered" => 2,
+             "running" => 0,
+             "total" => 3
+           }
+
+    assert is_nil(health["latest_running"])
+    assert get_in(health, ["latest_failed", "id"]) == "session-failed"
+    assert get_in(health, ["latest_failed", "detail"]) =~ "unauthorized"
+    assert get_in(health, ["latest_failed", "last_receipt", "tool"]) == "shell"
+    assert get_in(health, ["latest_failed", "last_receipt", "duration_ms"]) == 42
+    assert get_in(health, ["latest_recovered", "id"]) == "session-running"
+    assert get_in(health, ["latest_recovered", "stop_reason"]) == "run_interrupted"
+
+    persisted = SessionStore.load("session-running", root: session_root)
+    assert persisted["stop_reason"] == "run_interrupted"
+    assert persisted["run_state"]["status"] == "idle"
+    assert persisted["output"] == "still running"
   end
 
   defp start_daemon(daemon_root, opts) do

@@ -27,21 +27,24 @@ defmodule ClawCode.Tools.Builtin do
       function_spec("python_eval", "Run a small Python snippet.", %{
         "type" => "object",
         "properties" => %{
-          "code" => %{"type" => "string"}
+          "code" => %{"type" => "string"},
+          "timeout_ms" => %{"type" => "integer", "minimum" => 100, "maximum" => 60_000}
         },
         "required" => ["code"]
       }),
       function_spec("lua_eval", "Run a small Lua snippet.", %{
         "type" => "object",
         "properties" => %{
-          "code" => %{"type" => "string"}
+          "code" => %{"type" => "string"},
+          "timeout_ms" => %{"type" => "integer", "minimum" => 100, "maximum" => 60_000}
         },
         "required" => ["code"]
       }),
       function_spec("lisp_eval", "Run a small Common Lisp snippet through SBCL.", %{
         "type" => "object",
         "properties" => %{
-          "code" => %{"type" => "string"}
+          "code" => %{"type" => "string"},
+          "timeout_ms" => %{"type" => "integer", "minimum" => 100, "maximum" => 60_000}
         },
         "required" => ["code"]
       })
@@ -110,19 +113,36 @@ defmodule ClawCode.Tools.Builtin do
   def execute_with_receipt("write_file", %{"path" => path, "content" => content}, opts) do
     started_at = System.monotonic_time(:millisecond)
     original_path = path
+    allow_write? = Keyword.get(opts, :allow_write, false)
 
     try do
-      if Keyword.get(opts, :allow_write, false) do
+      if allow_write? do
         path = safe_path(path)
         File.mkdir_p!(Path.dirname(path))
         File.write!(path, content)
         output = "wrote #{Path.relative_to(path, File.cwd!())}"
-        {:ok, output, local_receipt("write_file", started_at, 0, output, %{path: path})}
+
+        {:ok, output,
+         local_receipt("write_file", started_at, 0, output, %{
+           path: path,
+           policy: %{
+             "decision" => "allowed",
+             "rule" => "write_enabled",
+             "allow_write" => true
+           }
+         })}
       else
         message = "write_file is disabled; pass --allow-write to enable it"
 
         {:error, message,
-         local_receipt("write_file", started_at, "blocked", message, %{path: original_path})}
+         local_receipt("write_file", started_at, "blocked", message, %{
+           path: original_path,
+           policy: %{
+             "decision" => "blocked",
+             "rule" => "write_disabled",
+             "allow_write" => false
+           }
+         })}
       end
     rescue
       error ->
@@ -135,24 +155,37 @@ defmodule ClawCode.Tools.Builtin do
 
   def execute_with_receipt("shell", %{"command" => command} = arguments, opts) do
     started_at = System.monotonic_time(:millisecond)
+    allow_shell? = Keyword.get(opts, :allow_shell, false)
 
     cond do
-      not Keyword.get(opts, :allow_shell, false) ->
+      not allow_shell? ->
         message = "shell is disabled; pass --allow-shell to enable it"
 
         {:error, message,
          local_receipt("shell", started_at, "blocked", message, %{
            kind: "shell",
-           invocation: command
+           invocation: command,
+           policy: %{
+             "decision" => "blocked",
+             "rule" => "shell_disabled",
+             "allow_shell" => false
+           }
          })}
 
       blocked_shell_prefix?(command) ->
+        blocked_prefix = shell_prefix(command)
         message = "shell command blocked by policy: #{command}"
 
         {:error, message,
          local_receipt("shell", started_at, "blocked", message, %{
            kind: "shell",
-           invocation: command
+           invocation: command,
+           policy: %{
+             "decision" => "blocked",
+             "rule" => "blocked_shell_prefix",
+             "blocked_prefix" => blocked_prefix,
+             "allow_shell" => true
+           }
          })}
 
       true ->
@@ -165,25 +198,46 @@ defmodule ClawCode.Tools.Builtin do
              ) do
           {:ok, output, receipt} ->
             {:ok, output,
-             Map.merge(receipt, %{tool: "shell", kind: "shell", invocation: command})}
+             Map.merge(receipt, %{
+               tool: "shell",
+               kind: "shell",
+               invocation: command,
+               policy: %{
+                 "decision" => "allowed",
+                 "rule" => "shell_enabled",
+                 "allow_shell" => true
+               }
+             })}
 
           {:error, receipt} ->
             {:error, receipt.output,
-             Map.merge(receipt, %{tool: "shell", kind: "shell", invocation: command})}
+             Map.merge(receipt, %{
+               tool: "shell",
+               kind: "shell",
+               invocation: command,
+               policy: %{
+                 "decision" => "allowed",
+                 "rule" => "shell_enabled",
+                 "allow_shell" => true
+               }
+             })}
         end
     end
   end
 
-  def execute_with_receipt("python_eval", %{"code" => code}, _opts) do
-    Host.run_runtime_with_receipt(:python, code) |> format_runtime_result("python_eval")
+  def execute_with_receipt("python_eval", %{"code" => code} = arguments, _opts) do
+    Host.run_runtime_with_receipt(:python, code, runtime_timeout_opts(arguments))
+    |> format_runtime_result("python_eval")
   end
 
-  def execute_with_receipt("lua_eval", %{"code" => code}, _opts) do
-    Host.run_runtime_with_receipt(:lua, code) |> format_runtime_result("lua_eval")
+  def execute_with_receipt("lua_eval", %{"code" => code} = arguments, _opts) do
+    Host.run_runtime_with_receipt(:lua, code, runtime_timeout_opts(arguments))
+    |> format_runtime_result("lua_eval")
   end
 
-  def execute_with_receipt("lisp_eval", %{"code" => code}, _opts) do
-    Host.run_runtime_with_receipt(:common_lisp, code) |> format_runtime_result("lisp_eval")
+  def execute_with_receipt("lisp_eval", %{"code" => code} = arguments, _opts) do
+    Host.run_runtime_with_receipt(:common_lisp, code, runtime_timeout_opts(arguments))
+    |> format_runtime_result("lisp_eval")
   end
 
   def execute_with_receipt(name, _arguments, _opts) do
@@ -270,6 +324,9 @@ defmodule ClawCode.Tools.Builtin do
     {:error, output, receipt |> Map.put(:tool, tool_name) |> Map.put(:kind, "runtime")}
   end
 
+  defp runtime_timeout_opts(%{"timeout_ms" => value}), do: [timeout_ms: shell_timeout(value)]
+  defp runtime_timeout_opts(_arguments), do: []
+
   defp local_receipt(tool_name, started_at, exit_status, output, extras) do
     Map.merge(
       %{
@@ -287,11 +344,14 @@ defmodule ClawCode.Tools.Builtin do
   end
 
   defp blocked_shell_prefix?(command) do
+    shell_prefix(command) in @blocked_shell_prefixes
+  end
+
+  defp shell_prefix(command) do
     command
     |> String.trim_leading()
     |> String.split(~r/\s+/, parts: 2)
     |> List.first()
-    |> then(&(&1 in @blocked_shell_prefixes))
   end
 
   defp local_status(0), do: "ok"

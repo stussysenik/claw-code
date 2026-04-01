@@ -8,6 +8,7 @@
 ## Table of Contents
 
 - [What Lives Here](#what-lives-here)
+- [Vision Design Roadmap And Stack](#vision-design-roadmap-and-stack)
 - [Architecture Reference](#architecture-reference)
 - [Original Workflow Parity](#original-workflow-parity)
 - [Canonical Operator Layer](#canonical-operator-layer)
@@ -27,6 +28,15 @@
 - Python, Lua, and Common Lisp stay as adapters, not core dependencies.
 - GLM, Kimi, and NVIDIA NIM stay behind one OpenAI-compatible provider boundary.
 - OMX is the planning and execution layer, not the shipped runtime.
+
+## Vision Design Roadmap And Stack
+
+The fastest top-level orientation is now split cleanly:
+
+- [VISION.md](./VISION.md) explains what the repo is trying to become and what "daily-driver" means.
+- [DESIGN.md](./DESIGN.md) defines the system shape and the boundaries that should not drift while we keep building.
+- [ROADMAP.md](./ROADMAP.md) turns the current readiness bar plus the competitive feature study into one execution order.
+- [TECHSTACK.md](./TECHSTACK.md) records the concrete runtime, provider, adapter, native, and release stack in the repo today.
 
 ## Architecture Reference
 
@@ -55,6 +65,7 @@ The preserved operator workflows from the archived workspace are documented in [
 - [scripts/ralph-native.sh](./scripts/ralph-native.sh)
 - [scripts/ralph-adapters.sh](./scripts/ralph-adapters.sh)
 - [scripts/ralph-provider.sh](./scripts/ralph-provider.sh)
+- [scripts/ralph-provider-matrix.sh](./scripts/ralph-provider-matrix.sh)
 - [scripts/ralph-daemon.sh](./scripts/ralph-daemon.sh)
 - [scripts/ralph-release.sh](./scripts/ralph-release.sh)
 - [package.json](./package.json)
@@ -67,6 +78,7 @@ The preserved operator workflows from the archived workspace are documented in [
 
 OpenSpec now holds the canonical "what is left until this is a daily driver?" plan.
 
+- [ROADMAP.md](./ROADMAP.md)
 - [openspec/README.md](./openspec/README.md)
 - [openspec/project.md](./openspec/project.md)
 - [openspec/changes/reach-daily-driver/proposal.md](./openspec/changes/reach-daily-driver/proposal.md)
@@ -74,7 +86,7 @@ OpenSpec now holds the canonical "what is left until this is a daily driver?" pl
 - [openspec/changes/reach-daily-driver/tasks.md](./openspec/changes/reach-daily-driver/tasks.md)
 - [openspec/changes/reach-daily-driver/specs/daily-driver/spec.md](./openspec/changes/reach-daily-driver/specs/daily-driver/spec.md)
 
-The OpenSpec layer defines the daily-driver bar and the remaining phases. `.omx/board.md` and the Ralph loops remain the execution surface.
+`ROADMAP.md` is the short product-and-priority version. The OpenSpec layer defines the sharper daily-driver bar and the remaining phases. `.omx/board.md` and the Ralph loops remain the execution surface.
 
 ## Working Commands
 
@@ -92,6 +104,7 @@ Canonical QA dispatcher:
 ./scripts/qa.sh native
 ./scripts/qa.sh adapters
 ./scripts/qa.sh provider "say hello and report the configured provider"
+./scripts/qa.sh provider-matrix
 ./scripts/qa.sh daemon
 ./scripts/qa.sh release
 ```
@@ -104,6 +117,7 @@ mix claw_code.native.build
 mix test
 mix escript.build
 ./claw_code summary
+./claw_code providers
 ./claw_code doctor
 ./claw_code probe
 ./claw_code symphony --native "review MCP tool"
@@ -116,7 +130,11 @@ Sessions live under `.claw/sessions/` and can be resumed by explicit id.
 
 ```bash
 ./claw_code chat --session-id my-session --provider kimi "inspect this repo"
+./claw_code chat --session-id my-session --provider kimi --image ./diagram.png "inspect this screenshot"
+./claw_code chat --session-id my-session --provider glm --model GLM-5.1 --vision-provider kimi --vision-model kimi-k2.5 --image ./diagram.png "inspect this screenshot"
 ./claw_code resume-session my-session --provider kimi "continue from the last state"
+./claw_code resume-session my-session --provider kimi --image ./diagram.png "compare this new screenshot with the last run"
+./claw_code resume-session my-session --provider glm --model GLM-5.1 --vision-provider kimi --vision-model kimi-k2.5 --image ./diagram-2.png "compare this new screenshot with the last run"
 ./claw_code resume-session latest --provider kimi "continue the latest session"
 ./claw_code sessions --limit 10
 ./claw_code sessions --limit 10 --query build
@@ -130,7 +148,9 @@ Sessions live under `.claw/sessions/` and can be resumed by explicit id.
 
 `load-session` exposes `created=` and `updated=` timestamps together with message and receipt counts. `sessions` gives a fast index of recent session ids, run states, stop reasons, and receipt counts, and now accepts `--query` for substring search across ids, prompts, outputs, provider names, and message content. The direct runtime path still allows one active run per session id inside the same BEAM and checkpoints tool receipts/messages before the final provider reply lands. If you need cross-process control, use the daemon-backed path explicitly.
 
-The inspection surface is intentionally getting denser as the repo moves toward daily-driver status: `sessions` now includes provider and output summaries, while `load-session` shows provider/model plus run timing and stop metadata before the optional message and receipt details.
+The inspection surface is intentionally getting denser as the repo moves toward daily-driver status: `sessions` now includes provider and output summaries, while `load-session` shows provider/model plus run timing and stop metadata before the optional message and receipt details. When a session includes multimodal user input, `load-session --show-messages` renders compact image markers like `[image:diagram.png]` instead of dumping raw content-part maps, and split-backbone runs add compact derived markers like `[vision:kimi/kimi-k2.5] ...` instead of hiding that extra context in raw JSON.
+
+If a specific session JSON is corrupted or partial, `load-session`, `resume-session`, `cancel-session`, and `chat --session-id ...` now fail against that session id with an explicit local invalid-session message instead of crashing the runtime or silently replacing the broken file with a fresh session.
 
 ## Persistent Control Plane
 
@@ -147,23 +167,43 @@ The inspection surface is intentionally getting denser as the repo moves toward 
 
 The design goal is not a network service or a distributed node mesh. It is a boring, inspectable local coordinator that can survive a shell exit, keep session ownership stable, and become the foundation for future multi-client control without loosening the current KISS/DRY/SRP boundaries. Use `--session-root PATH` and `--daemon-root PATH` when you want isolated operator roots for testing or parallel work.
 
-If a session was previously left in `run=running` and the daemon/runtime later recovers it cold, the recovered state is now made explicit as `run_interrupted` instead of pretending the abandoned run is still live.
+Once a daemon is running, its session root is authoritative. Later daemon-backed `chat`, `resume-session`, and `cancel-session` calls fail explicitly if they try to override that root, so background work cannot silently fork across multiple session directories.
+
+Daemon startup now also reconciles any abandoned persisted `run=running` sessions in its session root before it reports health, and the recovered state is made explicit as `run_interrupted` instead of pretending the abandoned run is still live.
+
+`./claw_code daemon status` now also derives a compact session-health view from the daemon's session root: busy/failed/partially recovered signals, aggregate running/failed/recovered counts, plus `latest_running`, `latest_failed`, and `latest_recovered` summaries with recent receipt detail for the newest failed run. That keeps break/fix triage on one command instead of forcing immediate `load-session` hops.
 
 The final UX can absolutely include a full terminal UI, and the correct layering stays engine first: the Elixir runtime and daemon remain the product core, and the TUI is a client over that control plane instead of the architectural center.
 
-`./claw_code tui` is the first in-repo slice of that client. It is intentionally minimal: recent sessions, selected transcript, prompt/output summaries, provider/model diagnostics, tool receipts, aggregate run counts, selected-session run metadata, optional `watch` refresh cadence, `follow` targets like `running` or `latest-running`, an `active` alias plus `focus active` preset for monitoring live work, targeted `cancel active` / `cancel running` intervention, in-client provider/model/base-url switching with reset-to-default, session filtering and limits, substring `find`, transcript `find-msg` with `next-hit` / `prev-hit`, `open latest-completed`, targeted `resume latest ...`, provider `probe`, and a command loop for `chat`, `resume`, `open`, `next`, `prev`, `cancel`, and `tools`.
+`./claw_code tui` is the first in-repo slice of that client. It is intentionally minimal: recent sessions, selected transcript, prompt/output summaries, provider/model diagnostics, tool receipts, aggregate run counts, selected-session run metadata, optional `watch` refresh cadence, `follow` targets like `running`, `latest-running`, or `latest-failed`, an `active` alias plus `focus active` preset for monitoring live work, explicit `inspect active` / `inspect failed` shortcuts over the same alias resolver used by `open`, targeted `cancel active` / `cancel running` intervention, in-client provider/model/base-url switching with reset-to-default, session filtering and limits, root-wide substring `find`, explicit `older` / `newer` paging through larger session roots, transcript `find-msg` with `next-hit` / `prev-hit`, alias-driven `open latest-completed` / `open latest-failed`, targeted `resume selected ...` / `resume active ...` / `resume latest-failed ...`, repeated `--image PATH` support on in-client `chat` and `resume`, bounded session-window rendering around the current selection, transcript tail windows with absolute message numbering, provider `probe`, and a command loop for `chat`, `resume`, `inspect`, `open`, `next`, `prev`, `older`, `newer`, `cancel`, and `tools`.
+
+The TUI header/footer now also surfaces compact `provider_health`, `input_modalities`, and `selected_health` summaries so missing config, image-capable providers, failed sessions, and active work are visible without opening more detail panes. If you want split reasoning plus vision in the client, start `./claw_code tui` with the same `--vision-*` flags you would use on `chat` or `resume-session`. The compact operator loop is documented in [docs/reference/tui.md](./docs/reference/tui.md#operator-quickstart).
 
 ## Provider Setup
 
 Provider contracts are documented in [docs/providers.md](./docs/providers.md). `claw_code` accepts explicit CLI flags and also autoloads `.env.local` / `.env` at runtime for local development. Those files are git-ignored in this repo.
 
+The checked-in template is [`.env.local.example`](./.env.local.example). Copy it to `.env.local`, uncomment one provider block, and keep secrets local. The runtime load order is explicit: existing shell env wins, then `.env.local`, then `.env`.
+
 `chat` and `resume-session` default to an `auto` tool policy: repo or tool-oriented prompts expose local tools, plain chat prompts do not. Use `--tools` to force tool specs on, `--no-tools` to force a chat-only request, or `CLAW_TOOL_MODE=auto|on|off` to set the default behavior across local and daemon-backed runs.
 
-`./claw_code probe` is the fastest way to validate a provider before a longer chat. It sends one small chat-completions request and reports the request URL, configuration state, provider portability hints like `auth_mode` / `tool_support` / `payload_modes`, latency, the final `request_mode`, and a short response preview. Generic endpoints now retry once with a minimal `model + messages` payload when they reject extra OpenAI-style fields such as `temperature`, `tools`, or `tool_choice`. Generic endpoints can also override the auth header with `--api-key-header` or `CLAW_API_KEY_HEADER` when they expect something other than `Authorization: Bearer ...`.
+`./claw_code doctor` now makes the active shell and write access explicit, `chat` results now echo the run permissions snapshot, and `load-session --show-receipts` now includes blocked-policy detail for destructive shell commands instead of only saying the tool was blocked.
+
+The runtime adapters behind `python_eval`, `lua_eval`, and `lisp_eval` now also accept optional `timeout_ms` arguments and persist explicit runtime, engine, invocation, exit-status, and merged stderr/stdout output in their receipts, so adapter failures and timeouts stay inspectable instead of collapsing into opaque tool errors.
+
+`chat` and `resume-session` also accept repeated `--image PATH` flags. Session state keeps those local image references replayable as provider-agnostic content parts, and the OpenAI-compatible provider boundary translates them into request-time `image_url` parts only when the selected backend call is built.
+
+When the main reasoning model is not the best vision model, `chat` and `resume-session` also accept `--vision-provider`, `--vision-model`, `--vision-base-url`, `--vision-api-key`, and `--vision-api-key-header`, plus the matching `CLAW_VISION_*` env vars. In that split mode, `claw_code` first derives replayable `vision_context` from the configured vision-capable backbone and then sends a text-only augmented request to the primary reasoning model. That keeps combinations like `--provider glm --model GLM-5.1 --vision-provider kimi --vision-model kimi-k2.5` or `--provider glm --model GLM-5.1 --vision-model GLM-4.6V` inside the same session and daemon boundary instead of inventing a second workflow.
+
+`./claw_code probe` is the fastest way to validate a provider before a longer chat. It sends one small chat-completions request and reports the request URL, configuration state, provider portability hints like `auth_mode` / `tool_support` / `input_modalities` / `payload_modes`, the requested input shape, latency, the final `request_mode`, and a short response preview. Generic endpoints now retry once with a minimal `model + messages` payload when they reject extra OpenAI-style fields such as `temperature`, `tools`, or `tool_choice`. Generic endpoints can also override the auth header with `--api-key-header` or `CLAW_API_KEY_HEADER` when they expect something other than `Authorization: Bearer ...`.
+
+When you want to preflight a vision-capable model specifically, pass repeated `--image PATH` flags to `probe` before starting a real session.
 
 Core operator commands now also support `--json`, which is the intended first contract for a future terminal UI client. The boundary is documented in [docs/reference/tui.md](./docs/reference/tui.md).
 
-`./claw_code doctor` now reports whether the active provider is fully configured, which request URL will be used, and whether each field came from an env var, a default, or is still missing.
+`./claw_code doctor` now reports whether the active provider is fully configured, which request URL will be used, which input modalities the provider boundary accepts, and whether each field came from an env var, a default, or is still missing.
+
+`./claw_code providers` is the matrix view for the whole supported provider set, including input-modality support, and `./scripts/qa.sh provider-matrix` is the corresponding Ralph loop for pre-RC validation.
 
 ## Release Automation
 

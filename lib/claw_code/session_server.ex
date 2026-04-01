@@ -10,18 +10,25 @@ defmodule ClawCode.SessionServer do
 
   def ensure_started(session_id \\ nil, opts \\ []) do
     session_id = session_id || SessionStore.new_id()
+    root = Keyword.get(opts, :root, SessionStore.root_dir())
 
     case Registry.lookup(ClawCode.SessionRegistry, session_id) do
       [{pid, _value}] ->
         {:ok, session_id, pid}
 
       [] ->
-        child_spec = {__MODULE__, Keyword.merge(opts, session_id: session_id)}
+        case SessionStore.fetch(session_id, root: root) do
+          {:error, {:invalid_session, _details} = reason} ->
+            {:error, reason}
 
-        case DynamicSupervisor.start_child(ClawCode.SessionSupervisor, child_spec) do
-          {:ok, pid} -> {:ok, session_id, pid}
-          {:error, {:already_started, pid}} -> {:ok, session_id, pid}
-          other -> other
+          _other ->
+            child_spec = {__MODULE__, Keyword.merge(opts, session_id: session_id)}
+
+            case DynamicSupervisor.start_child(ClawCode.SessionSupervisor, child_spec) do
+              {:ok, pid} -> {:ok, session_id, pid}
+              {:error, {:already_started, pid}} -> {:ok, session_id, pid}
+              other -> other
+            end
         end
     end
   end
@@ -29,6 +36,10 @@ defmodule ClawCode.SessionServer do
   def snapshot(pid) when is_pid(pid), do: GenServer.call(pid, :snapshot)
   def begin_run(pid) when is_pid(pid), do: GenServer.call(pid, :begin_run)
   def attach_run(pid, task_pid) when is_pid(pid), do: GenServer.call(pid, {:attach_run, task_pid})
+
+  def record_run_exit(pid, reason) when is_pid(pid),
+    do: GenServer.call(pid, {:record_run_exit, reason})
+
   def checkpoint(pid, payload) when is_pid(pid), do: GenServer.call(pid, {:checkpoint, payload})
   def finish_run(pid, payload) when is_pid(pid), do: GenServer.call(pid, {:finish_run, payload})
   def cancel_run(pid) when is_pid(pid), do: GenServer.call(pid, :cancel_run)
@@ -44,9 +55,16 @@ defmodule ClawCode.SessionServer do
       case SessionStore.fetch(session_id, root: root) do
         {:ok, session} -> reconcile_loaded_session(session, root)
         :error -> SessionStore.document(%{id: session_id})
+        {:error, {:invalid_session, _details} = reason} -> {:stop, reason}
       end
 
-    {:ok, %{id: session_id, root: root, document: document, active_run: nil}}
+    case document do
+      {:stop, reason} ->
+        {:stop, reason}
+
+      document ->
+        {:ok, %{id: session_id, root: root, document: document, active_run: nil}}
+    end
   end
 
   @impl true
@@ -75,6 +93,11 @@ defmodule ClawCode.SessionServer do
     ref = Process.monitor(task_pid)
     active_run = Map.merge(state.active_run, %{task_pid: task_pid, monitor_ref: ref})
     {:reply, :ok, %{state | active_run: active_run}}
+  end
+
+  def handle_call({:record_run_exit, reason}, _from, state) do
+    {path, document, state} = finalize_run_exit(state, reason)
+    {:reply, {path, document}, state}
   end
 
   def handle_call({:checkpoint, payload}, _from, state) do
@@ -147,22 +170,7 @@ defmodule ClawCode.SessionServer do
         {:DOWN, ref, :process, _pid, reason},
         %{active_run: %{monitor_ref: ref}} = state
       ) do
-    state = clear_active_run(state)
-
-    state =
-      if crash_reason?(reason) and state.document["stop_reason"] == "running" do
-        {_path, _document, state} =
-          persist_document(state, %{
-            "stop_reason" => "run_crashed",
-            "output" => "Session run crashed: #{inspect(reason)}",
-            "run_state" => finished_run_state("run_crashed")
-          })
-
-        state
-      else
-        state
-      end
-
+    {_path, _document, state} = finalize_run_exit(state, reason)
     {:noreply, state}
   end
 
@@ -184,18 +192,23 @@ defmodule ClawCode.SessionServer do
   end
 
   defp reconcile_loaded_session(session, root) do
-    if get_in(session, ["run_state", "status"]) == "running" do
-      document =
-        session
-        |> Map.put("stop_reason", "run_interrupted")
-        |> Map.put_new("output", "Session run interrupted during recovery.")
-        |> Map.put("run_state", finished_run_state("run_interrupted"))
-        |> SessionStore.document(id: session["id"])
+    case SessionStore.recover_running_session(session, root: root) do
+      {:ok, persisted} -> persisted
+      :noop -> session
+    end
+  end
 
-      {_path, persisted} = SessionStore.write(document, root: root)
-      persisted
+  defp finalize_run_exit(state, reason) do
+    state = clear_active_run(state)
+
+    if crash_reason?(reason) and state.document["stop_reason"] == "running" do
+      persist_document(state, %{
+        "stop_reason" => "run_crashed",
+        "output" => "Session run crashed: #{inspect(reason)}",
+        "run_state" => finished_run_state("run_crashed")
+      })
     else
-      session
+      {SessionStore.path(state.id, root: state.root), state.document, state}
     end
   end
 

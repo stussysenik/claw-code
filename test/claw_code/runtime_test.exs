@@ -37,6 +37,243 @@ defmodule ClawCode.RuntimeTest do
     refute Map.has_key?(session["provider"], "api_key")
   end
 
+  test "chat persists replayable multimodal user content when image input is provided" do
+    root = Path.join(System.tmp_dir!(), "claw-code-runtime-multimodal-#{SessionStore.new_id()}")
+    File.rm_rf(root)
+    File.mkdir_p!(root)
+
+    on_exit(fn -> File.rm_rf(root) end)
+
+    image_path = write_png(root, "sample.png")
+
+    result =
+      Runtime.chat("describe this image",
+        provider: "generic",
+        base_url: nil,
+        api_key: nil,
+        model: nil,
+        image: image_path,
+        session_root: root,
+        native: false
+      )
+
+    assert result.stop_reason == "missing_provider_config"
+
+    session =
+      result.session_path
+      |> Path.basename(".json")
+      |> then(&SessionStore.load(&1, root: Path.dirname(result.session_path)))
+
+    assert Enum.at(session["messages"], 1) == %{
+             "role" => "user",
+             "content" => [
+               %{"type" => "text", "text" => "describe this image"},
+               %{
+                 "type" => "input_image",
+                 "path" => Path.expand(image_path),
+                 "mime_type" => "image/png"
+               }
+             ]
+           }
+  end
+
+  test "chat returns invalid_image_input when a local image path is missing" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "claw-code-runtime-multimodal-missing-#{SessionStore.new_id()}"
+      )
+
+    File.rm_rf(root)
+    File.mkdir_p!(root)
+
+    on_exit(fn -> File.rm_rf(root) end)
+
+    missing_path = Path.join(root, "missing.png")
+
+    result =
+      Runtime.chat("describe this image",
+        provider: "generic",
+        base_url: nil,
+        api_key: nil,
+        model: nil,
+        image: missing_path,
+        session_root: root,
+        native: false
+      )
+
+    assert result.stop_reason == "invalid_image_input"
+    assert result.output =~ "Image input does not exist"
+
+    session =
+      result.session_path
+      |> Path.basename(".json")
+      |> then(&SessionStore.load(&1, root: Path.dirname(result.session_path)))
+
+    assert session["messages"] == []
+    assert session["stop_reason"] == "invalid_image_input"
+  end
+
+  test "chat can use a separate vision backbone and send text-only context to the primary provider" do
+    root =
+      Path.join(System.tmp_dir!(), "claw-code-runtime-vision-backbone-#{SessionStore.new_id()}")
+
+    File.rm_rf(root)
+    File.mkdir_p!(root)
+
+    on_exit(fn -> File.rm_rf(root) end)
+
+    image_path = write_png(root, "vision-backbone.png")
+
+    {vision_base_url, vision_listener, vision_server} =
+      start_stub_server(
+        [
+          Jason.encode!(%{
+            "choices" => [
+              %{
+                "message" => %{
+                  "role" => "assistant",
+                  "content" => "a red warning dialog with two buttons"
+                }
+              }
+            ]
+          })
+        ],
+        capture_requests: true
+      )
+
+    {base_url, listener, server} =
+      start_stub_server(
+        [
+          Jason.encode!(%{
+            "choices" => [
+              %{
+                "message" => %{
+                  "role" => "assistant",
+                  "content" => "reasoned answer"
+                }
+              }
+            ]
+          })
+        ],
+        capture_requests: true
+      )
+
+    on_exit(fn ->
+      send(vision_server, :stop)
+      :gen_tcp.close(vision_listener)
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    result =
+      Runtime.chat("describe this screenshot",
+        provider: "glm",
+        base_url: base_url,
+        api_key: "glm-test-key",
+        model: "GLM-5.1",
+        vision_provider: "kimi",
+        vision_base_url: vision_base_url,
+        vision_api_key: "kimi-test-key",
+        vision_model: "kimi-k2.5",
+        image: image_path,
+        session_root: root,
+        native: false
+      )
+
+    assert result.stop_reason == "completed"
+    assert result.output == "reasoned answer"
+
+    assert_receive {:request, vision_request}, 1_000
+    assert vision_request =~ "\"model\":\"kimi-k2.5\""
+    assert vision_request =~ "\"type\":\"image_url\""
+    assert vision_request =~ "describe this screenshot"
+
+    assert_receive {:request, primary_request}, 1_000
+    assert primary_request =~ "\"model\":\"GLM-5.1\""
+
+    assert primary_request =~
+             "Vision context from kimi/kimi-k2.5: a red warning dialog with two buttons"
+
+    refute primary_request =~ "\"type\":\"image_url\""
+
+    session =
+      result.session_path
+      |> Path.basename(".json")
+      |> then(&SessionStore.load(&1, root: Path.dirname(result.session_path)))
+
+    assert Enum.at(session["messages"], 1) == %{
+             "role" => "user",
+             "content" => [
+               %{"type" => "text", "text" => "describe this screenshot"},
+               %{
+                 "type" => "input_image",
+                 "path" => Path.expand(image_path),
+                 "mime_type" => "image/png"
+               },
+               %{
+                 "type" => "vision_context",
+                 "provider" => "kimi",
+                 "model" => "kimi-k2.5",
+                 "text" => "a red warning dialog with two buttons"
+               }
+             ]
+           }
+
+    assert session["provider"]["provider"] == "glm"
+    assert session["provider"]["model"] == "GLM-5.1"
+    assert session["provider"]["vision_backbone"]["provider"] == "kimi"
+    assert session["provider"]["vision_backbone"]["model"] == "kimi-k2.5"
+  end
+
+  test "chat fails explicitly when split vision config is requested but incomplete" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "claw-code-runtime-vision-backbone-missing-#{SessionStore.new_id()}"
+      )
+
+    File.rm_rf(root)
+    File.mkdir_p!(root)
+
+    on_exit(fn -> File.rm_rf(root) end)
+
+    image_path = write_png(root, "vision-missing.png")
+
+    result =
+      Runtime.chat("describe this screenshot",
+        provider: "generic",
+        base_url: "http://127.0.0.1:4000/v1",
+        model: "reasoner",
+        vision_provider: "kimi",
+        image: image_path,
+        session_root: root,
+        native: false
+      )
+
+    assert result.stop_reason == "missing_vision_provider_config"
+    assert result.output =~ "Missing vision provider configuration for kimi"
+
+    session =
+      result.session_path
+      |> Path.basename(".json")
+      |> then(&SessionStore.load(&1, root: Path.dirname(result.session_path)))
+
+    assert Enum.at(session["messages"], 1) == %{
+             "role" => "user",
+             "content" => [
+               %{"type" => "text", "text" => "describe this screenshot"},
+               %{
+                 "type" => "input_image",
+                 "path" => Path.expand(image_path),
+                 "mime_type" => "image/png"
+               }
+             ]
+           }
+
+    assert session["stop_reason"] == "missing_vision_provider_config"
+  end
+
   test "chat persists tool receipts when the provider requests a local tool" do
     responses = [
       %{
@@ -108,6 +345,84 @@ defmodule ClawCode.RuntimeTest do
     assert hd(session["tool_receipts"])["tool_name"] == "shell"
     assert session["provider"]["api_key_present"] == true
     refute Map.has_key?(session["provider"], "api_key")
+  end
+
+  test "chat persists adapter timeout receipts when the provider requests python_eval" do
+    responses = [
+      %{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => nil,
+              "tool_calls" => [
+                %{
+                  "id" => "call_1",
+                  "type" => "function",
+                  "function" => %{
+                    "name" => "python_eval",
+                    "arguments" =>
+                      Jason.encode!(%{
+                        "code" => "import time; time.sleep(1)",
+                        "timeout_ms" => 100
+                      })
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      %{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => "python timeout handled"
+            }
+          }
+        ]
+      }
+    ]
+
+    {base_url, listener, server} = start_stub_server(Enum.map(responses, &Jason.encode!/1))
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    result =
+      Runtime.chat("run python with a short timeout",
+        provider: "generic",
+        base_url: base_url,
+        api_key: "test-key",
+        model: "test-model",
+        native: false
+      )
+
+    assert result.stop_reason == "completed"
+    assert result.output == "python timeout handled"
+    assert length(result.tool_receipts) == 1
+
+    [receipt] = result.tool_receipts
+    assert receipt.tool_name == "python_eval"
+    assert receipt.argument_keys == ["code", "timeout_ms"]
+    assert receipt.status == "timeout"
+    assert receipt.exit_status == "timeout"
+    assert receipt.output =~ "timed out after 100ms"
+    assert receipt.runtime == "python"
+
+    session =
+      result.session_path
+      |> Path.basename(".json")
+      |> then(&SessionStore.load(&1, root: Path.dirname(result.session_path)))
+
+    assert hd(session["tool_receipts"])["tool_name"] == "python_eval"
+    assert hd(session["tool_receipts"])["status"] == "timeout"
+    assert hd(session["tool_receipts"])["exit_status"] == "timeout"
+    assert hd(session["tool_receipts"])["output"] =~ "timed out after 100ms"
+    assert hd(session["tool_receipts"])["runtime"] == "python"
   end
 
   test "chat works with a generic openai-compatible endpoint that does not require auth" do
@@ -201,6 +516,73 @@ defmodule ClawCode.RuntimeTest do
       |> then(&SessionStore.load(&1, root: Path.dirname(result.session_path)))
 
     assert session["provider"]["api_key_header"] == "api-key"
+  end
+
+  test "chat sends local image inputs as image_url parts and persists local image refs" do
+    image_path =
+      Path.join(System.tmp_dir!(), "claw-code-runtime-image-#{SessionStore.new_id()}.png")
+
+    File.write!(image_path, "fake-image-data")
+
+    on_exit(fn ->
+      File.rm(image_path)
+    end)
+
+    responses = [
+      %{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => "vision reply"
+            }
+          }
+        ]
+      }
+    ]
+
+    {base_url, listener, server} =
+      start_stub_server(Enum.map(responses, &Jason.encode!/1), capture_requests: true)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    result =
+      Runtime.chat("describe this screenshot",
+        provider: "generic",
+        base_url: base_url,
+        api_key: nil,
+        model: "local-model",
+        image: image_path,
+        native: false
+      )
+
+    assert result.stop_reason == "completed"
+    assert result.output == "vision reply"
+
+    assert_receive {:request, request}, 1_000
+    assert request =~ "\"image_url\""
+    assert request =~ "\"text\":\"describe this screenshot\""
+    assert request =~ "data:image/png;base64,ZmFrZS1pbWFnZS1kYXRh"
+
+    session =
+      result.session_path
+      |> Path.basename(".json")
+      |> then(&SessionStore.load(&1, root: Path.dirname(result.session_path)))
+
+    assert Enum.at(session["messages"], 1) == %{
+             "role" => "user",
+             "content" => [
+               %{"type" => "text", "text" => "describe this screenshot"},
+               %{
+                 "type" => "input_image",
+                 "path" => image_path,
+                 "mime_type" => "image/png"
+               }
+             ]
+           }
   end
 
   test "chat includes tool specs when the prompt implies repo work" do
@@ -492,6 +874,93 @@ defmodule ClawCode.RuntimeTest do
     assert result.stop_reason == "completed"
   end
 
+  test "chat persists permissions and blocked destructive shell receipt policy" do
+    root =
+      Path.join(System.tmp_dir!(), "claw-code-runtime-shell-policy-#{SessionStore.new_id()}")
+
+    File.rm_rf(root)
+
+    responses = [
+      Jason.encode!(%{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => nil,
+              "tool_calls" => [
+                %{
+                  "id" => "call_1",
+                  "type" => "function",
+                  "function" => %{
+                    "name" => "shell",
+                    "arguments" => Jason.encode!(%{"command" => "rm -rf /tmp/example"})
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }),
+      Jason.encode!(%{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "content" => "blocked as expected"
+            }
+          }
+        ]
+      })
+    ]
+
+    {base_url, listener, server} = start_stub_server(responses)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    result =
+      Runtime.chat("run a dangerous shell command",
+        provider: "generic",
+        base_url: base_url,
+        api_key: "test-key",
+        model: "test-model",
+        session_root: root,
+        allow_shell: true,
+        native: false,
+        tools: true
+      )
+
+    assert result.stop_reason == "completed"
+    assert result.permissions.tool_policy == :enabled
+    assert result.permissions.allow_shell == true
+    assert result.permissions.allow_write == false
+    assert length(result.tool_receipts) == 1
+
+    [receipt] = result.tool_receipts
+    assert receipt.status == "blocked"
+    assert receipt.exit_status == "blocked"
+    assert receipt.policy["rule"] == "blocked_shell_prefix"
+    assert receipt.policy["blocked_prefix"] == "rm"
+
+    session =
+      result.session_path
+      |> Path.basename(".json")
+      |> then(&SessionStore.load(&1, root: Path.dirname(result.session_path)))
+
+    assert session["permissions"] == %{
+             "tool_policy" => "enabled",
+             "allow_shell" => true,
+             "allow_write" => false,
+             "deny_tools" => [],
+             "deny_prefixes" => []
+           }
+
+    assert hd(session["tool_receipts"])["policy"]["rule"] == "blocked_shell_prefix"
+    assert hd(session["tool_receipts"])["policy"]["blocked_prefix"] == "rm"
+  end
+
   test "chat resumes an existing session when session_id is provided" do
     responses = [
       %{
@@ -600,6 +1069,38 @@ defmodule ClawCode.RuntimeTest do
 
     result = Task.await(task, 2_000)
     assert result.stop_reason == "cancelled"
+  end
+
+  test "chat fails locally and clearly when a resumed session document is invalid" do
+    root =
+      Path.join(System.tmp_dir!(), "claw-code-runtime-invalid-session-#{SessionStore.new_id()}")
+
+    session_id = "broken-runtime-session"
+
+    File.rm_rf(root)
+    File.mkdir_p!(root)
+
+    on_exit(fn -> File.rm_rf(root) end)
+
+    path = Path.join(root, "#{session_id}.json")
+    File.write!(path, "{not-json")
+
+    result =
+      Runtime.chat("resume me",
+        provider: "generic",
+        base_url: nil,
+        api_key: nil,
+        model: nil,
+        session_id: session_id,
+        session_root: root,
+        native: false
+      )
+
+    assert result.stop_reason == "invalid_session_state"
+    assert result.session_id == session_id
+    assert result.session_path == path
+    assert result.output =~ "Session state is invalid for #{session_id}"
+    assert File.read!(path) == "{not-json"
   end
 
   test "chat accepts legacy function_call responses" do
@@ -902,4 +1403,17 @@ defmodule ClawCode.RuntimeTest do
   end
 
   defp wait_until(_fun, 0), do: false
+
+  defp write_png(root, name) do
+    path = Path.join(root, name)
+
+    File.write!(
+      path,
+      Base.decode64!(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7+X3cAAAAASUVORK5CYII="
+      )
+    )
+
+    path
+  end
 end

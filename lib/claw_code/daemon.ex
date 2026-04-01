@@ -6,11 +6,17 @@ defmodule ClawCode.Daemon do
   @default_request_timeout_ms 60_000
   @request_keys ~w(
     limit
+    image
     provider
     model
     base_url
     api_key
     api_key_header
+    vision_provider
+    vision_model
+    vision_base_url
+    vision_api_key
+    vision_api_key_header
     session_id
     max_turns
     allow_shell
@@ -49,7 +55,13 @@ defmodule ClawCode.Daemon do
   def status(opts \\ []) do
     case fetch_metadata(opts) do
       :error ->
-        {:ok, %{"status" => "stopped", "root" => root_dir(opts)}}
+        {:ok,
+         %{
+           "status" => "stopped",
+           "root" => root_dir(opts),
+           "session_root" => session_root(opts)
+         }
+         |> maybe_put_session_health()}
 
       {:ok, metadata} ->
         ping_opts = Keyword.put_new(opts, :daemon_timeout_ms, @default_connect_timeout_ms)
@@ -60,10 +72,15 @@ defmodule ClawCode.Daemon do
              metadata
              |> Map.merge(result)
              |> Map.put("status", "running")
-             |> Map.put("root", root_dir(opts))}
+             |> Map.put("root", root_dir(opts))
+             |> maybe_put_session_health()}
 
           {:error, _reason} ->
-            {:ok, metadata |> Map.put("status", "stale") |> Map.put("root", root_dir(opts))}
+            {:ok,
+             metadata
+             |> Map.put("status", "stale")
+             |> Map.put("root", root_dir(opts))
+             |> maybe_put_session_health()}
         end
     end
   end
@@ -94,7 +111,10 @@ defmodule ClawCode.Daemon do
         "session_root" => session_root(opts)
       }
 
+      SessionStore.recover_running_sessions(root: metadata["session_root"])
       write_metadata(metadata, opts)
+
+      runtime_opts = Keyword.put(opts, :session_root, metadata["session_root"])
 
       acceptor =
         Task.Supervisor.async_nolink(ClawCode.TaskSupervisor, fn ->
@@ -102,7 +122,7 @@ defmodule ClawCode.Daemon do
         end)
 
       try do
-        loop(%{listener: listener, acceptor: acceptor, token: token, opts: opts})
+        loop(%{listener: listener, acceptor: acceptor, token: token, opts: runtime_opts})
       after
         Task.shutdown(acceptor, :brutal_kill)
         :gen_tcp.close(listener)
@@ -222,8 +242,9 @@ defmodule ClawCode.Daemon do
 
   defp dispatch("chat", %{"prompt" => prompt, "opts" => opts}, daemon_opts, _server_pid)
        when is_binary(prompt) do
-    {:ok,
-     Runtime.chat(prompt, merge_opts(keyword_opts(opts), daemon_opts)) |> result_to_payload()}
+    with {:ok, runtime_opts} <- merge_opts(keyword_opts(opts), daemon_opts) do
+      {:ok, Runtime.chat(prompt, runtime_opts) |> result_to_payload()}
+    end
   end
 
   defp dispatch(
@@ -232,21 +253,23 @@ defmodule ClawCode.Daemon do
          daemon_opts,
          _server_pid
        ) do
-    case Runtime.cancel(session_id, merge_opts(keyword_opts(opts), daemon_opts)) do
-      {:ok, {path, document}} ->
-        {:ok,
-         %{
-           "session_id" => session_id,
-           "session_path" => path,
-           "stop_reason" => document["stop_reason"],
-           "run_state" => document["run_state"]
-         }}
+    with {:ok, runtime_opts} <- merge_opts(keyword_opts(opts), daemon_opts) do
+      case Runtime.cancel(session_id, runtime_opts) do
+        {:ok, {path, document}} ->
+          {:ok,
+           %{
+             "session_id" => session_id,
+             "session_path" => path,
+             "stop_reason" => document["stop_reason"],
+             "run_state" => document["run_state"]
+           }}
 
-      {:error, :not_running} ->
-        {:error, :session_not_running}
+        {:error, :not_running} ->
+          {:error, :session_not_running}
 
-      {:error, reason} ->
-        {:error, reason}
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -326,7 +349,7 @@ defmodule ClawCode.Daemon do
       key = Atom.to_string(key)
 
       if key in @request_keys do
-        Map.put(acc, key, value)
+        put_request_opt(acc, key, value)
       else
         acc
       end
@@ -336,20 +359,42 @@ defmodule ClawCode.Daemon do
   defp keyword_opts(map) when is_map(map) do
     Enum.flat_map(@request_keys, fn key ->
       case Map.fetch(map, key) do
-        {:ok, value} -> [{String.to_atom(key), value}]
-        :error -> []
+        {:ok, values} when key == "image" and is_list(values) ->
+          Enum.map(values, &{:image, &1})
+
+        {:ok, value} ->
+          [{String.to_atom(key), value}]
+
+        :error ->
+          []
       end
     end)
   end
 
-  defp merge_opts(request_opts, daemon_opts) do
-    Keyword.merge(default_runtime_opts(daemon_opts), request_opts)
+  defp put_request_opt(acc, "image", value) do
+    Map.update(acc, "image", [value], &(&1 ++ [value]))
   end
 
-  defp default_runtime_opts(daemon_opts) do
-    case Keyword.get(daemon_opts, :session_root) do
-      nil -> []
-      session_root -> [session_root: session_root]
+  defp put_request_opt(acc, key, value), do: Map.put(acc, key, value)
+
+  defp merge_opts(request_opts, daemon_opts) do
+    daemon_session_root = canonical_session_root(session_root(daemon_opts))
+
+    case Keyword.get(request_opts, :session_root) do
+      nil ->
+        {:ok, Keyword.put(request_opts, :session_root, daemon_session_root)}
+
+      request_session_root ->
+        canonical_request_root = canonical_session_root(request_session_root)
+
+        if canonical_request_root == daemon_session_root do
+          {:ok,
+           request_opts
+           |> Keyword.delete(:session_root)
+           |> Keyword.put(:session_root, daemon_session_root)}
+        else
+          {:error, session_root_mismatch_message(daemon_session_root, canonical_request_root)}
+        end
     end
   end
 
@@ -362,6 +407,8 @@ defmodule ClawCode.Daemon do
       "session_id" => result.session_id,
       "turns" => result.turns,
       "provider" => result.provider,
+      "vision_backbone" => json_safe(result.vision_backbone),
+      "permissions" => json_safe(result.permissions),
       "requirements" => result.requirements,
       "tool_receipts" => json_safe(result.tool_receipts),
       "routed_matches" => json_safe(result.routed_matches),
@@ -380,6 +427,8 @@ defmodule ClawCode.Daemon do
       session_id: payload["session_id"],
       turns: payload["turns"],
       provider: payload["provider"],
+      vision_backbone: payload["vision_backbone"],
+      permissions: payload["permissions"],
       requirements: payload["requirements"] || [],
       tool_receipts: payload["tool_receipts"] || [],
       routed_matches: payload["routed_matches"] || [],
@@ -480,6 +529,19 @@ defmodule ClawCode.Daemon do
     Keyword.get(opts, :session_root, SessionStore.root_dir())
   end
 
+  defp canonical_session_root(path), do: Path.expand(path)
+
+  defp session_root_mismatch_message(daemon_session_root, request_session_root) do
+    "Daemon session root mismatch: daemon owns #{daemon_session_root} but request used #{request_session_root}."
+  end
+
+  defp maybe_put_session_health(%{"session_root" => session_root} = status)
+       when is_binary(session_root) and session_root != "" do
+    Map.put(status, "health", SessionStore.health(root: session_root))
+  end
+
+  defp maybe_put_session_health(status), do: status
+
   defp parse_error("not_found"), do: :not_found
   defp parse_error("not_running"), do: :not_running
   defp parse_error("unauthorized"), do: :unauthorized
@@ -498,6 +560,7 @@ defmodule ClawCode.Daemon do
   defp format_error(:missing_executable), do: "missing_executable"
   defp format_error(:session_not_running), do: "session_not_running"
   defp format_error(:stop_timeout), do: "stop_timeout"
+  defp format_error({:invalid_session, _details} = reason), do: SessionStore.error_message(reason)
   defp format_error(reason) when is_binary(reason), do: reason
   defp format_error(reason), do: inspect(reason)
 

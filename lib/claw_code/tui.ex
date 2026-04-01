@@ -1,6 +1,9 @@
 defmodule ClawCode.TUI do
-  alias ClawCode.{Daemon, Manifest, SessionStore}
+  alias ClawCode.{Daemon, Manifest, Multimodal, SessionStore}
   alias ClawCode.Providers.OpenAICompatible
+
+  @session_window_size 8
+  @message_window_size 6
 
   defmodule State do
     @enforce_keys [:opts]
@@ -12,6 +15,10 @@ defmodule ClawCode.TUI do
               session_filter: :all,
               session_query: nil,
               session_limit: 8,
+              session_offset: 0,
+              session_total: 0,
+              older_sessions_available: false,
+              newer_sessions_available: false,
               session_root: nil,
               watch_interval_ms: nil,
               follow_target: nil,
@@ -35,6 +42,10 @@ defmodule ClawCode.TUI do
       daemon_status["session_root"] || Keyword.get(opts, :session_root, SessionStore.root_dir())
 
     session_limit = Map.get(ui, :session_limit, Keyword.get(opts, :limit, 8))
+
+    session_offset =
+      normalize_session_offset(Map.get(ui, :session_offset, Keyword.get(opts, :offset, 0)))
+
     session_filter = Map.get(ui, :session_filter, :all)
 
     session_query =
@@ -45,8 +56,11 @@ defmodule ClawCode.TUI do
     transcript_query = normalize_transcript_query(Map.get(ui, :transcript_query))
     transcript_match_index = Map.get(ui, :transcript_match_index, 0)
 
-    all_sessions = SessionStore.list(limit: session_limit, root: session_root)
-    sessions = all_sessions |> filter_sessions(session_filter) |> search_sessions(session_query)
+    {all_sessions, resolved_session_offset, session_total, older_sessions_available,
+     newer_sessions_available} =
+      load_session_page(session_root, session_limit, session_offset, session_query)
+
+    sessions = all_sessions |> filter_sessions(session_filter)
     selected_session_id = default_selected_session_id(sessions)
     selected_session = fetch_session(selected_session_id, session_root)
 
@@ -59,6 +73,10 @@ defmodule ClawCode.TUI do
       session_filter: session_filter,
       session_query: session_query,
       session_limit: session_limit,
+      session_offset: resolved_session_offset,
+      session_total: session_total,
+      older_sessions_available: older_sessions_available,
+      newer_sessions_available: newer_sessions_available,
       session_root: session_root,
       watch_interval_ms: watch_interval_ms,
       follow_target: follow_target,
@@ -70,6 +88,34 @@ defmodule ClawCode.TUI do
     }
     |> apply_follow_target()
     |> normalize_transcript_state()
+  end
+
+  defp load_session_page(session_root, session_limit, session_offset, session_query) do
+    session_total = SessionStore.count(root: session_root, query: session_query)
+
+    fetched_sessions =
+      SessionStore.list(
+        limit: session_limit + 1,
+        offset: session_offset,
+        root: session_root,
+        query: session_query
+      )
+
+    visible_sessions = Enum.take(fetched_sessions, session_limit)
+
+    cond do
+      visible_sessions != [] or session_offset == 0 ->
+        {visible_sessions, session_offset, session_total,
+         length(fetched_sessions) > session_limit, session_offset > 0}
+
+      true ->
+        load_session_page(
+          session_root,
+          session_limit,
+          max(session_offset - session_limit, 0),
+          session_query
+        )
+    end
   end
 
   def apply_command(%State{} = state, input) when is_binary(input) do
@@ -103,6 +149,12 @@ defmodule ClawCode.TUI do
 
       <<"cancel ", value::binary>> ->
         cancel_target(state, value)
+
+      "inspect" ->
+        inspect_selected(state)
+
+      <<"inspect ", value::binary>> ->
+        inspect_target(state, value)
 
       <<"filter ", filter::binary>> ->
         set_session_filter(state, filter)
@@ -143,6 +195,12 @@ defmodule ClawCode.TUI do
       "prev" ->
         step_session(state, -1)
 
+      "older" ->
+        page_sessions(state, :older)
+
+      "newer" ->
+        page_sessions(state, :newer)
+
       <<"open ", rest::binary>> ->
         open_session(state, rest)
 
@@ -176,25 +234,34 @@ defmodule ClawCode.TUI do
     [
       "# Claw Code TUI",
       "",
-      "daemon=#{state.daemon_status["status"] || "unknown"} provider=#{state.doctor[:provider] || "unknown"} model=#{nested_value(state.doctor, [:model, :value]) || "missing"} tools=#{state.doctor[:tool_policy] || :auto}",
+      "daemon=#{state.daemon_status["status"] || "unknown"} provider=#{state.doctor[:provider] || "unknown"} model=#{nested_value(state.doctor, [:model, :value]) || "missing"} tools=#{state.doctor[:tool_policy] || :auto} shell=#{state.doctor[:shell_access] || "-"} write=#{state.doctor[:write_access] || "-"}",
+      "provider_health=#{provider_health_summary(state.doctor)} auth=#{state.doctor[:auth_mode] || "-"} support=#{state.doctor[:tool_support] || "-"} missing=#{render_summary_list(state.doctor[:missing] || [])}",
+      "input_modalities=#{render_summary_list(state.doctor[:input_modalities] || [])}",
       "base_url=#{nested_value(state.doctor, [:base_url, :value]) || "missing"} selected=#{selected_session_position(state)}",
       "runs=running:#{count_sessions(state.all_sessions, &session_running?/1)} completed:#{count_sessions(state.all_sessions, &session_completed?/1)} failed:#{count_sessions(state.all_sessions, &session_failed?/1)}",
-      "sessions=#{length(state.sessions)}/#{length(state.all_sessions)} filter=#{state.session_filter} limit=#{state.session_limit} query=#{state.session_query || "-"}",
+      daemon_health_lines(state.daemon_status["health"]),
+      "sessions=#{length(state.sessions)}/#{length(state.all_sessions)} filter=#{state.session_filter} limit=#{state.session_limit} page=#{session_page_label(state)} query=#{state.session_query || "-"}",
       "watch=#{watch_label(state.watch_interval_ms)} follow=#{state.follow_target || "off"}",
       "transcript_query=#{state.transcript_query || "-"} hit=#{selected_transcript_hit_position(state)}",
       "selected_run=#{selected_run_summary(state.selected_session)}",
+      "selected_health=#{selected_health_summary(state.selected_session)}",
       "selected_receipt=#{selected_receipt_summary(state.selected_session)}",
       "session_root=#{state.session_root}",
       if(state.notice, do: "notice=#{state.notice}"),
       "",
       "## Sessions",
-      render_sessions(state.sessions, state.selected_session_id),
+      render_sessions(
+        state.sessions,
+        state.selected_session_id,
+        state.session_offset,
+        state.session_total
+      ),
       "",
       "## Selected",
       render_selected_session(state),
       "",
       "## Commands",
-      "chat <prompt> | resume <prompt> | resume <n|id|latest|active|running|completed|failed> <prompt> | open <n|id|latest|active|latest-running|latest-completed|running|completed|failed> | cancel [selected|n|id|latest|active|running|completed|failed] | filter <all|running|completed|failed> | find <substring> | clear find | watch <seconds|on|off> | follow <latest|active|running|latest-running|completed|failed|off> | focus <active|all> | find-msg <substring> | clear find-msg | next-hit | prev-hit | limit <n> | next | prev | provider <name|default> | model <name|default> | base-url <url> | clear base-url | tools auto|on|off | probe | refresh | help | quit"
+      render_command_summary(" | ")
     ]
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join("\n")
@@ -281,10 +348,24 @@ defmodule ClawCode.TUI do
          session_root: session_root,
          daemon_status: daemon_status
        }) do
-    {:ok, status} = Daemon.status(opts)
+    current_session_root = daemon_status["session_root"] || session_root
 
-    status
-    |> Map.put_new("session_root", daemon_status["session_root"] || session_root)
+    status_opts =
+      case daemon_status["root"] do
+        root when is_binary(root) and root != "" -> Keyword.put(opts, :daemon_root, root)
+        _other -> opts
+      end
+
+    {:ok, status} = Daemon.status(status_opts)
+
+    if daemon_matches?(status, daemon_status, current_session_root) do
+      status
+      |> Map.put_new("session_root", current_session_root)
+    else
+      daemon_status
+      |> Map.put_new("session_root", current_session_root)
+      |> Map.put("health", SessionStore.health(root: current_session_root))
+    end
   end
 
   defp open_session(%State{} = state, value) do
@@ -309,34 +390,40 @@ defmodule ClawCode.TUI do
     send_chat(state, prompt, resume?, nil)
   end
 
-  defp send_chat(%State{} = state, prompt, resume?, resume_session_id) do
-    prompt = String.trim(prompt)
+  defp send_chat(%State{} = state, prompt_spec, resume?, resume_session_id) do
     target_session_id = if(resume?, do: resume_session_id || state.selected_session_id)
 
-    cond do
-      prompt == "" ->
-        {:continue, %{state | notice: "Prompt is required."}}
+    case parse_prompt_spec(prompt_spec) do
+      {:error, message} ->
+        {:continue, %{state | notice: message}}
 
-      resume? and is_nil(target_session_id) ->
-        {:continue, %{state | notice: "No session selected."}}
+      {:ok, prompt, images} ->
+        cond do
+          resume? and is_nil(target_session_id) ->
+            {:continue, %{state | notice: "No session selected."}}
 
-      true ->
-        chat_opts =
-          if resume? do
-            Keyword.put(state.opts, :session_id, target_session_id)
-          else
-            state.opts
-          end
+          true ->
+            chat_opts =
+              state.opts
+              |> put_image_opts(images)
+              |> then(fn opts ->
+                if resume? do
+                  Keyword.put(opts, :session_id, target_session_id)
+                else
+                  opts
+                end
+              end)
 
-        case Daemon.chat(prompt, chat_opts) do
-          {:ok, result} ->
-            refresh(
-              %{state | selected_session_id: result.session_id},
-              "Completed #{result.stop_reason} for #{result.session_id}."
-            )
+            case Daemon.chat(prompt, chat_opts) do
+              {:ok, result} ->
+                refresh(
+                  %{state | selected_session_id: result.session_id},
+                  "Completed #{result.stop_reason} for #{result.session_id}."
+                )
 
-          {:error, reason} ->
-            {:continue, %{state | notice: "Chat failed: #{format_reason(reason)}"}}
+              {:error, reason} ->
+                {:continue, %{state | notice: "Chat failed: #{format_reason(reason)}"}}
+            end
         end
     end
   end
@@ -346,18 +433,29 @@ defmodule ClawCode.TUI do
 
     case String.split(value, ~r/\s+/, parts: 2, trim: true) do
       [target, prompt] ->
-        case resolve_session_id(target, state.sessions, state.all_sessions) do
+        case resolve_resume_session_id(state, target) do
           nil ->
-            send_chat(state, value, true)
+            if selected_target?(target) do
+              send_chat(state, prompt, true)
+            else
+              send_chat(state, value, true)
+            end
 
           session_id ->
             send_chat(%{state | selected_session_id: session_id}, prompt, true, session_id)
         end
 
       [target] ->
-        case resolve_session_id(target, state.sessions, state.all_sessions) do
-          nil -> send_chat(state, target, true)
-          _session_id -> {:continue, %{state | notice: "Prompt is required."}}
+        case resolve_resume_session_id(state, target) do
+          nil ->
+            if selected_target?(target) do
+              {:continue, %{state | notice: "Prompt is required."}}
+            else
+              send_chat(state, target, true)
+            end
+
+          _session_id ->
+            {:continue, %{state | notice: "Prompt is required."}}
         end
 
       [] ->
@@ -371,6 +469,26 @@ defmodule ClawCode.TUI do
 
   defp cancel_selected(%State{} = state) do
     cancel_session(state, state.selected_session_id)
+  end
+
+  defp inspect_selected(%State{selected_session_id: nil} = state) do
+    {:continue, %{state | notice: "No session selected."}}
+  end
+
+  defp inspect_selected(%State{} = state) do
+    open_session(state, state.selected_session_id)
+  end
+
+  defp inspect_target(%State{} = state, value) do
+    target = String.trim(value)
+
+    cond do
+      String.downcase(target) == "selected" ->
+        inspect_selected(state)
+
+      true ->
+        open_session(state, target)
+    end
   end
 
   defp cancel_target(%State{} = state, value) do
@@ -506,7 +624,7 @@ defmodule ClawCode.TUI do
           |> build_state(
             refresh_daemon_status(state),
             "Filter set to #{session_filter}.",
-            %{ui_state(state) | session_filter: session_filter}
+            %{ui_state(state) | session_filter: session_filter, session_offset: 0}
           )
           |> preserve_selection(state.selected_session_id)
 
@@ -522,7 +640,7 @@ defmodule ClawCode.TUI do
           |> build_state(
             refresh_daemon_status(state),
             "Session limit set to #{session_limit}.",
-            %{ui_state(state) | session_limit: session_limit}
+            %{ui_state(state) | session_limit: session_limit, session_offset: 0}
           )
           |> preserve_selection(state.selected_session_id)
 
@@ -544,7 +662,7 @@ defmodule ClawCode.TUI do
         |> build_state(
           refresh_daemon_status(state),
           "Find set to #{session_query}.",
-          %{ui_state(state) | session_query: session_query}
+          %{ui_state(state) | session_query: session_query, session_offset: 0}
         )
         |> preserve_selection(state.selected_session_id)
 
@@ -558,7 +676,7 @@ defmodule ClawCode.TUI do
       |> build_state(
         refresh_daemon_status(state),
         "Find cleared.",
-        %{ui_state(state) | session_query: nil}
+        %{ui_state(state) | session_query: nil, session_offset: 0}
       )
       |> preserve_selection(state.selected_session_id)
 
@@ -600,6 +718,7 @@ defmodule ClawCode.TUI do
         next_state =
           state
           |> Map.put(:session_filter, :running)
+          |> Map.put(:session_offset, 0)
           |> Map.put(:follow_target, "running")
           |> Map.put(:watch_interval_ms, 1_000)
           |> apply_focus_refresh("Focus set to active sessions.")
@@ -610,6 +729,7 @@ defmodule ClawCode.TUI do
         next_state =
           state
           |> Map.put(:session_filter, :all)
+          |> Map.put(:session_offset, 0)
           |> Map.put(:follow_target, nil)
           |> Map.put(:watch_interval_ms, nil)
           |> apply_focus_refresh("Focus reset to all sessions.")
@@ -705,6 +825,7 @@ defmodule ClawCode.TUI do
       session_filter: state.session_filter || :all,
       session_query: state.session_query,
       session_limit: state.session_limit || 8,
+      session_offset: state.session_offset || 0,
       watch_interval_ms: state.watch_interval_ms,
       follow_target: state.follow_target,
       transcript_query: state.transcript_query,
@@ -807,34 +928,49 @@ defmodule ClawCode.TUI do
   defp filter_sessions(sessions, :completed), do: Enum.filter(sessions, &session_completed?/1)
   defp filter_sessions(sessions, :failed), do: Enum.filter(sessions, &session_failed?/1)
 
-  defp search_sessions(sessions, nil), do: sessions
+  defp session_window(sessions, selected_session_id) do
+    total = length(sessions)
 
-  defp search_sessions(sessions, query) do
-    normalized_query = String.downcase(query)
+    if total <= @session_window_size do
+      {sessions, 0}
+    else
+      selected_index =
+        Enum.find_index(sessions, &(&1["id"] == selected_session_id)) || 0
 
-    Enum.filter(sessions, fn session ->
-      session
-      |> session_search_text()
-      |> String.contains?(normalized_query)
-    end)
+      start_index =
+        selected_index
+        |> Kernel.-(div(@session_window_size, 2))
+        |> max(0)
+        |> min(total - @session_window_size)
+
+      {Enum.slice(sessions, start_index, @session_window_size), start_index}
+    end
   end
 
-  defp render_sessions([], _selected_session_id), do: "none"
+  defp render_sessions([], _selected_session_id, _session_offset, _session_total), do: "none"
 
-  defp render_sessions(sessions, selected_session_id) do
-    sessions
-    |> Enum.with_index(1)
-    |> Enum.map_join("\n", fn {session, index} ->
-      marker = if session["id"] == selected_session_id, do: ">", else: " "
-      updated_at = session["updated_at"] || session["saved_at"] || "unknown"
-      run_status = get_in(session, ["run_state", "status"]) || "unknown"
-      stop_reason = session["stop_reason"] || "unknown"
-      provider = session_provider(session)
-      messages = length(session["messages"] || [])
-      receipts = length(session["tool_receipts"] || [])
+  defp render_sessions(sessions, selected_session_id, session_offset, session_total) do
+    session_total = max(session_total, session_offset + length(sessions))
+    {visible_sessions, start_index} = session_window(sessions, selected_session_id)
+    global_start_index = session_offset + start_index
+    end_index = global_start_index + length(visible_sessions)
 
-      "#{marker} #{index}. #{session["id"]} #{updated_at} run=#{run_status} stop=#{stop_reason} provider=#{provider} messages=#{messages} receipts=#{receipts}"
-    end)
+    [
+      "  showing #{global_start_index + 1}-#{end_index}/#{session_total} sessions",
+      Enum.map_join(Enum.with_index(visible_sessions, global_start_index + 1), "\n", fn {session,
+                                                                                         index} ->
+        marker = if session["id"] == selected_session_id, do: ">", else: " "
+        updated_at = session["updated_at"] || session["saved_at"] || "unknown"
+        run_status = get_in(session, ["run_state", "status"]) || "unknown"
+        stop_reason = session["stop_reason"] || "unknown"
+        provider = session_provider(session)
+        messages = length(session["messages"] || [])
+        receipts = length(session["tool_receipts"] || [])
+
+        "#{marker} #{index}. #{session["id"]} #{updated_at} run=#{run_status} stop=#{stop_reason} provider=#{provider} messages=#{messages} receipts=#{receipts}"
+      end)
+    ]
+    |> Enum.join("\n")
   end
 
   defp render_selected_session(%State{selected_session: nil}), do: "none"
@@ -865,14 +1001,23 @@ defmodule ClawCode.TUI do
   defp render_messages([], _query, _match_index), do: "  none"
 
   defp render_messages(messages, nil, _match_index) do
-    messages
-    |> Enum.take(-6)
-    |> Enum.with_index(1)
-    |> Enum.map_join("\n", fn {message, index} ->
-      role = message["role"] || "unknown"
-      content = summarize(message["content"])
-      "  #{index}. #{role}: #{content}"
-    end)
+    total = length(messages)
+    start_index = max(total - @message_window_size, 0)
+
+    visible_messages =
+      messages
+      |> Enum.drop(start_index)
+      |> Enum.with_index(start_index + 1)
+
+    [
+      "  showing #{start_index + 1}-#{total}/#{total} messages",
+      Enum.map_join(visible_messages, "\n", fn {message, index} ->
+        role = message["role"] || "unknown"
+        content = summarize(message["content"])
+        "  #{index}. #{role}: #{content}"
+      end)
+    ]
+    |> Enum.join("\n")
   end
 
   defp render_messages(messages, query, match_index) do
@@ -894,6 +1039,7 @@ defmodule ClawCode.TUI do
 
         [
           "  match #{match_index + 1}/#{length(matches)} for #{inspect(query)}",
+          "  showing #{start_index + 1}-#{end_index + 1}/#{length(messages)} messages",
           Enum.map_join(visible_messages, "\n", fn {message, index} ->
             role = message["role"] || "unknown"
             content = summarize(message["content"])
@@ -946,7 +1092,138 @@ defmodule ClawCode.TUI do
   end
 
   defp help_text do
-    "Commands: chat <prompt>, resume <prompt>, resume <n|id|latest|active|running|completed|failed> <prompt>, open <n|id|latest|active|latest-running|latest-completed|running|completed|failed>, cancel [selected|n|id|latest|active|running|completed|failed], filter <all|running|completed|failed>, find <substring>, clear find, watch <seconds|on|off>, follow <latest|active|running|latest-running|completed|failed|off>, focus <active|all>, find-msg <substring>, clear find-msg, next-hit, prev-hit, limit <n>, next, prev, provider <name|default>, model <name|default>, base-url <url>, clear base-url, tools auto|on|off, probe, refresh, help, quit"
+    "Commands: " <> render_command_summary(", ")
+  end
+
+  defp render_command_summary(separator) do
+    command_segments()
+    |> Enum.join(separator)
+  end
+
+  defp command_segments do
+    [
+      "chat [--image PATH]... <prompt>",
+      "resume [--image PATH]... <prompt>",
+      "resume <selected|n|id|latest|active|running|latest-running|completed|latest-completed|failed|latest-failed> [--image PATH]... <prompt>",
+      "inspect [selected|n|id|latest|active|running|latest-running|completed|latest-completed|failed|latest-failed]",
+      "open <n|id|latest|active|running|latest-running|completed|latest-completed|failed|latest-failed>",
+      "cancel [selected|n|id|latest|active|running|latest-running|completed|latest-completed|failed|latest-failed]",
+      "filter <all|running|completed|failed>",
+      "find <substring>",
+      "clear find",
+      "watch <seconds|on|off>",
+      "follow <latest|active|running|latest-running|completed|latest-completed|failed|latest-failed|off>",
+      "focus <active|all>",
+      "find-msg <substring>",
+      "clear find-msg",
+      "next-hit",
+      "prev-hit",
+      "limit <n>",
+      "next",
+      "prev",
+      "older",
+      "newer",
+      "provider <name|default>",
+      "model <name|default>",
+      "base-url <url>",
+      "clear base-url",
+      "tools auto|on|off",
+      "probe",
+      "refresh",
+      "help",
+      "quit"
+    ]
+  end
+
+  defp parse_prompt_spec(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> do_parse_prompt_spec([])
+  end
+
+  defp do_parse_prompt_spec("", _images), do: {:error, "Prompt is required."}
+
+  defp do_parse_prompt_spec(value, images) do
+    case pop_token(value) do
+      {nil, _rest} ->
+        {:error, "Prompt is required."}
+
+      {"--image", rest} ->
+        case pop_token(rest) do
+          {nil, _rest} ->
+            {:error, "Image path is required."}
+
+          {path, remaining} ->
+            do_parse_prompt_spec(remaining, images ++ [path])
+        end
+
+      {_other, _rest} ->
+        {:ok, value, images}
+    end
+  end
+
+  defp pop_token(value) when is_binary(value) do
+    value = String.trim_leading(value)
+
+    case value do
+      "" ->
+        {nil, ""}
+
+      <<quote, rest::binary>> when quote in [?', ?"] ->
+        case String.split(rest, <<quote>>, parts: 2) do
+          [token, tail] -> {token, String.trim_leading(tail)}
+          [_partial] -> {rest, ""}
+        end
+
+      _other ->
+        case String.split(value, ~r/\s+/, parts: 2, trim: true) do
+          [token, tail] -> {token, tail}
+          [token] -> {token, ""}
+        end
+    end
+  end
+
+  defp put_image_opts(opts, images) do
+    Keyword.drop(opts, [:image]) ++ Enum.map(images, &{:image, &1})
+  end
+
+  defp page_sessions(%State{} = state, :newer) do
+    if state.session_offset == 0 do
+      {:continue, %{state | notice: "Already at the newest page."}}
+    else
+      rebuild_session_page(
+        state,
+        max(state.session_offset - state.session_limit, 0),
+        "Newer sessions loaded."
+      )
+    end
+  end
+
+  defp page_sessions(%State{} = state, :older) do
+    if state.older_sessions_available do
+      rebuild_session_page(
+        state,
+        state.session_offset + state.session_limit,
+        "Older sessions loaded."
+      )
+    else
+      {:continue, %{state | notice: "Already at the oldest page."}}
+    end
+  end
+
+  defp rebuild_session_page(%State{} = state, session_offset, notice) do
+    next_state =
+      state.opts
+      |> build_state(
+        refresh_daemon_status(state),
+        notice,
+        %{ui_state(state) | session_offset: session_offset}
+      )
+      |> preserve_selection(state.selected_session_id)
+      |> apply_follow_target()
+      |> normalize_transcript_state()
+
+    {:continue, next_state}
   end
 
   defp step_session(%State{sessions: []} = state, _offset) do
@@ -977,14 +1254,125 @@ defmodule ClawCode.TUI do
   defp selected_session_position(%State{sessions: []}), do: "none"
 
   defp selected_session_position(%State{} = state) do
+    session_total = max(state.session_total, length(state.sessions))
+
     case Enum.find_index(state.sessions, &(&1["id"] == state.selected_session_id)) do
       nil -> "none"
-      index -> "#{index + 1}/#{length(state.sessions)}"
+      index -> "#{state.session_offset + index + 1}/#{session_total}"
+    end
+  end
+
+  defp session_page_label(%State{} = state) do
+    session_total = max(state.session_total, state.session_offset + length(state.all_sessions))
+    newer = if(state.newer_sessions_available, do: "yes", else: "no")
+    older = if(state.older_sessions_available, do: "yes", else: "no")
+
+    if session_total == 0 do
+      "0-0/0 newer=#{newer} older=#{older}"
+    else
+      page_start = state.session_offset + 1
+      page_end = state.session_offset + length(state.all_sessions)
+      "#{page_start}-#{page_end}/#{session_total} newer=#{newer} older=#{older}"
     end
   end
 
   defp count_sessions(sessions, predicate) do
     Enum.count(sessions, predicate)
+  end
+
+  defp resolve_resume_session_id(%State{} = state, target) do
+    if selected_target?(target) do
+      state.selected_session_id
+    else
+      resolve_session_id(target, state.sessions, state.all_sessions)
+    end
+  end
+
+  defp selected_target?(value) do
+    String.trim(value)
+    |> String.downcase()
+    |> Kernel.==("selected")
+  end
+
+  defp provider_health_summary(doctor) when is_map(doctor) do
+    missing = doctor[:missing] || []
+
+    cond do
+      doctor[:configured] == true ->
+        "ready"
+
+      missing != [] ->
+        "missing"
+
+      true ->
+        "unknown"
+    end
+  end
+
+  defp provider_health_summary(_doctor), do: "unknown"
+
+  defp daemon_health_lines(nil), do: nil
+
+  defp daemon_health_lines(health) when is_map(health) do
+    counts = health["counts"] || %{}
+
+    [
+      "daemon_health=#{render_summary_list(health["signals"] || [])}",
+      "daemon_sessions=total:#{counts["total"] || 0} running:#{counts["running"] || 0} completed:#{counts["completed"] || 0} failed:#{counts["failed"] || 0} recovered:#{counts["recovered"] || 0} invalid:#{counts["invalid"] || 0}",
+      render_daemon_running_summary(health["latest_running"]),
+      render_daemon_attention_summary(health["latest_failed"]),
+      render_daemon_recovered_summary(health["latest_recovered"])
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n")
+  end
+
+  defp render_daemon_running_summary(nil), do: nil
+
+  defp render_daemon_running_summary(session) do
+    "daemon_active=#{session["id"]} provider=#{session["provider"] || "unknown"} stop=#{session["stop_reason"] || "unknown"} run=#{session["run"] || session["run_status"] || "unknown"}"
+  end
+
+  defp render_daemon_attention_summary(nil), do: nil
+
+  defp render_daemon_attention_summary(session) do
+    summary =
+      [
+        "daemon_attention=#{session["id"]}",
+        "provider=#{session["provider"] || "unknown"}",
+        "stop=#{session["stop_reason"] || "unknown"}",
+        daemon_receipt_summary(session["last_receipt"])
+      ]
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.join(" ")
+
+    case session["detail"] do
+      "-" -> summary
+      nil -> summary
+      detail -> summary <> "\ndetail=" <> detail
+    end
+  end
+
+  defp render_daemon_recovered_summary(nil), do: nil
+
+  defp render_daemon_recovered_summary(session) do
+    "daemon_recovered=#{session["id"]} provider=#{session["provider"] || "unknown"} stop=#{session["stop_reason"] || "unknown"}"
+  end
+
+  defp daemon_receipt_summary(nil), do: nil
+
+  defp daemon_receipt_summary(receipt) do
+    "receipt=#{receipt["tool"] || "unknown"}:#{receipt["status"] || "unknown"}:#{receipt["duration_ms"] || "-"}ms"
+  end
+
+  defp daemon_matches?(status, daemon_status, current_session_root) do
+    cond do
+      is_binary(daemon_status["root"]) and daemon_status["root"] != "" ->
+        status["root"] == daemon_status["root"]
+
+      true ->
+        status["session_root"] in [nil, current_session_root]
+    end
   end
 
   defp selected_run_summary(nil), do: "none"
@@ -1017,6 +1405,24 @@ defmodule ClawCode.TUI do
     end
   end
 
+  defp selected_health_summary(nil), do: "none"
+
+  defp selected_health_summary(session) do
+    cond do
+      session_running?(session) ->
+        "running"
+
+      session_failed?(session) ->
+        "failed stop=#{session["stop_reason"] || "-"} detail=#{failure_detail(session)}"
+
+      session_completed?(session) ->
+        "completed"
+
+      true ->
+        session["stop_reason"] || "idle"
+    end
+  end
+
   defp nested_value(map, keys) when is_map(map) do
     get_in(map, keys)
   end
@@ -1041,6 +1447,9 @@ defmodule ClawCode.TUI do
       query -> query
     end
   end
+
+  defp normalize_session_offset(value) when is_integer(value) and value >= 0, do: value
+  defp normalize_session_offset(_value), do: 0
 
   defp normalize_watch_interval(nil), do: nil
 
@@ -1169,25 +1578,11 @@ defmodule ClawCode.TUI do
       not is_nil(session["stop_reason"])
   end
 
-  defp session_search_text(session) do
-    [
-      session["id"],
-      session["prompt"],
-      session["output"],
-      session["stop_reason"],
-      get_in(session, ["provider", "provider"]),
-      Enum.map_join(session["messages"] || [], "\n", &message_search_text/1)
-    ]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.join("\n")
-    |> String.downcase()
-  end
-
   defp session_provider(session) do
     get_in(session, ["provider", "provider"]) || "unknown"
   end
 
-  defp message_search_text(%{"content" => content}) when is_binary(content), do: content
+  defp message_search_text(%{"content" => content}), do: Multimodal.search_text(content)
   defp message_search_text(%{"role" => role}) when is_binary(role), do: role
   defp message_search_text(_message), do: ""
 
@@ -1232,6 +1627,18 @@ defmodule ClawCode.TUI do
     |> List.last()
   end
 
+  defp failure_detail(session) do
+    session["output"]
+    |> summarize()
+    |> case do
+      "" -> "-"
+      detail -> detail
+    end
+  end
+
+  defp render_summary_list([]), do: "none"
+  defp render_summary_list(values), do: Enum.map_join(values, ", ", &to_string/1)
+
   defp spawn_input_reader do
     parent = self()
 
@@ -1272,6 +1679,12 @@ defmodule ClawCode.TUI do
     |> String.replace(~r/\s+/, " ")
     |> String.trim()
     |> String.slice(0, 140)
+  end
+
+  defp summarize(value) when is_list(value) do
+    value
+    |> Multimodal.summary()
+    |> summarize()
   end
 
   defp summarize(value), do: inspect(value)

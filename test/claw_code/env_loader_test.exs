@@ -51,6 +51,35 @@ defmodule ClawCode.EnvLoaderTest do
     assert System.get_env("BAR") == "bar-file"
   end
 
+  test "load prefers .env.local values over .env defaults" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "claw-code-env-loader-order-#{System.unique_integer([:positive])}"
+      )
+
+    File.rm_rf(root)
+    File.mkdir_p!(root)
+
+    File.write!(Path.join(root, ".env.local"), "FOO=from-local\n")
+    File.write!(Path.join(root, ".env"), "FOO=from-env\nBAR=from-env\n")
+
+    previous_foo = System.get_env("FOO")
+    previous_bar = System.get_env("BAR")
+    System.delete_env("FOO")
+    System.delete_env("BAR")
+
+    on_exit(fn ->
+      restore_env("FOO", previous_foo)
+      restore_env("BAR", previous_bar)
+      File.rm_rf(root)
+    end)
+
+    assert :ok = EnvLoader.load(cwd: root)
+    assert System.get_env("FOO") == "from-local"
+    assert System.get_env("BAR") == "from-env"
+  end
+
   defp restore_env(key, nil), do: System.delete_env(key)
   defp restore_env(key, value), do: System.put_env(key, value)
 end

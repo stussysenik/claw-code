@@ -2,6 +2,7 @@ defmodule ClawCode.CLI do
   alias ClawCode.{
     Daemon,
     Manifest,
+    Multimodal,
     Permissions,
     Registry,
     Router,
@@ -16,6 +17,7 @@ defmodule ClawCode.CLI do
   @switches [
     limit: :integer,
     query: :string,
+    image: :keep,
     deny_tool: :keep,
     deny_prefix: :keep,
     provider: :string,
@@ -23,6 +25,11 @@ defmodule ClawCode.CLI do
     base_url: :string,
     api_key: :string,
     api_key_header: :string,
+    vision_provider: :string,
+    vision_model: :string,
+    vision_base_url: :string,
+    vision_api_key: :string,
+    vision_api_key_header: :string,
     session_id: :string,
     max_turns: :integer,
     allow_shell: :boolean,
@@ -59,6 +66,19 @@ defmodule ClawCode.CLI do
       ["doctor" | rest] ->
         with {:ok, opts, _args} <- parse_opts(rest, validate_provider: true) do
           emit_value(Manifest.doctor_payload(opts), opts, fn -> Manifest.render_doctor(opts) end)
+          0
+        else
+          {:error, message} ->
+            emit_error(message, json_requested?(rest))
+            1
+        end
+
+      ["providers" | rest] ->
+        with {:ok, opts, _args} <- parse_opts(rest, validate_provider: true) do
+          emit_value(Manifest.provider_matrix_payload(opts), opts, fn ->
+            Manifest.render_provider_matrix(opts)
+          end)
+
           0
         else
           {:error, message} ->
@@ -289,6 +309,10 @@ defmodule ClawCode.CLI do
             emit_error("Session not found: #{session_ref}", json_requested?(rest))
             1
 
+          {:error, {:invalid_session, _details} = reason} ->
+            emit_error(session_store_error(reason), json_requested?(rest))
+            1
+
           {:error, message} ->
             emit_error(message, json_requested?(rest))
             1
@@ -314,6 +338,8 @@ defmodule ClawCode.CLI do
       "# Chat Result",
       "",
       "Provider: #{result.provider}",
+      render_chat_vision_backbone(result.vision_backbone),
+      render_chat_permissions(result.permissions),
       "Turns: #{result.turns}",
       "Stop reason: #{result.stop_reason}",
       "Session id: #{result.session_id}",
@@ -379,6 +405,8 @@ defmodule ClawCode.CLI do
       "updated=#{session["updated_at"] || session["saved_at"]}",
       "provider=#{session_provider(session)}",
       "model=#{get_in(session, ["provider", "model"]) || "-"}",
+      render_session_vision_backbone(session),
+      render_session_permissions(session),
       "#{length(messages)} messages",
       "requirements=#{length(requirements)}",
       "tool_receipts=#{length(tool_receipts)}",
@@ -406,7 +434,7 @@ defmodule ClawCode.CLI do
       |> Enum.with_index(1)
       |> Enum.map_join("\n", fn {message, index} ->
         role = message["role"] || "unknown"
-        content = summarize_text(message["content"])
+        content = message["content"] |> Multimodal.summary() |> summarize_text()
         "#{index}. #{role}: #{content}"
       end)
 
@@ -431,7 +459,13 @@ defmodule ClawCode.CLI do
 
         exit_status = receipt["exit_status"] || receipt[:exit_status] || "-"
         output = summarize_text(receipt["output"] || receipt[:output])
-        "#{index}. #{started_at} #{tool} status=#{status} exit=#{exit_status} output=#{output}"
+
+        [
+          "#{index}. #{started_at} #{tool} status=#{status} exit=#{exit_status} output=#{output}",
+          render_receipt_policy(receipt)
+        ]
+        |> Enum.reject(&(&1 in [nil, ""]))
+        |> Enum.join(" ")
       end)
 
     Enum.join([header, body], "\n")
@@ -452,12 +486,107 @@ defmodule ClawCode.CLI do
     invocation =
       receipt[:invocation] || receipt["invocation"] || receipt[:path] || receipt["path"] || ""
 
-    "Last receipt: #{tool} #{status} #{duration_ms}ms #{summarize_text(invocation)}"
+    [
+      "Last receipt: #{tool} #{status} #{duration_ms}ms #{summarize_text(invocation)}",
+      render_receipt_policy(receipt)
+    ]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join(" ")
   end
 
   defp session_provider(session) do
     get_in(session, ["provider", "provider"]) || "unknown"
   end
+
+  defp render_chat_vision_backbone(nil), do: nil
+
+  defp render_chat_vision_backbone(backbone) do
+    "Vision backbone: #{vision_backbone_label(backbone)}"
+  end
+
+  defp render_chat_permissions(nil), do: nil
+
+  defp render_chat_permissions(permissions) do
+    "Permissions: #{permission_label(permissions)}"
+  end
+
+  defp render_session_vision_backbone(session) do
+    case get_in(session, ["provider", "vision_backbone"]) do
+      nil -> nil
+      backbone -> "vision=#{vision_backbone_label(backbone)}"
+    end
+  end
+
+  defp render_session_permissions(session) do
+    case session["permissions"] do
+      nil -> nil
+      permissions -> "permissions=#{permission_label(permissions)}"
+    end
+  end
+
+  defp vision_backbone_label(%{"provider" => provider, "model" => model})
+       when is_binary(provider) and provider != "" and is_binary(model) and model != "" do
+    "#{provider}/#{model}"
+  end
+
+  defp vision_backbone_label(%{provider: provider, model: model})
+       when is_binary(provider) and provider != "" and is_binary(model) and model != "" do
+    "#{provider}/#{model}"
+  end
+
+  defp vision_backbone_label(%{"provider" => provider})
+       when is_binary(provider) and provider != "",
+       do: provider
+
+  defp vision_backbone_label(%{provider: provider}) when is_binary(provider) and provider != "",
+    do: provider
+
+  defp vision_backbone_label(%{"model" => model}) when is_binary(model) and model != "",
+    do: model
+
+  defp vision_backbone_label(%{model: model}) when is_binary(model) and model != "", do: model
+  defp vision_backbone_label(_backbone), do: "configured"
+
+  defp permission_label(%{
+         tool_policy: tool_policy,
+         allow_shell: allow_shell,
+         allow_write: allow_write
+       }) do
+    "tool_policy=#{tool_policy} shell=#{enabled_label(allow_shell)} write=#{enabled_label(allow_write)}"
+  end
+
+  defp permission_label(%{
+         "tool_policy" => tool_policy,
+         "allow_shell" => allow_shell,
+         "allow_write" => allow_write
+       }) do
+    "tool_policy=#{tool_policy} shell=#{enabled_label(allow_shell)} write=#{enabled_label(allow_write)}"
+  end
+
+  defp permission_label(_permissions), do: "configured"
+
+  defp render_receipt_policy(receipt) do
+    case receipt[:policy] || receipt["policy"] do
+      %{"rule" => "blocked_shell_prefix", "blocked_prefix" => prefix} ->
+        "policy=blocked_shell_prefix:#{prefix}"
+
+      %{rule: "blocked_shell_prefix", blocked_prefix: prefix} ->
+        "policy=blocked_shell_prefix:#{prefix}"
+
+      %{"rule" => rule} when is_binary(rule) ->
+        "policy=#{rule}"
+
+      %{rule: rule} when is_binary(rule) ->
+        "policy=#{rule}"
+
+      _other ->
+        nil
+    end
+  end
+
+  defp enabled_label(true), do: "enabled"
+  defp enabled_label(false), do: "disabled"
+  defp enabled_label(value), do: to_string(value)
 
   defp permission_context(opts) do
     Permissions.new(
@@ -473,12 +602,18 @@ defmodule ClawCode.CLI do
   end
 
   defp run_chat(prompt, opts) do
-    if Keyword.get(opts, :daemon, false) do
-      run_daemon_chat(prompt, opts)
+    with :ok <- validate_session_state(opts) do
+      if Keyword.get(opts, :daemon, false) do
+        run_daemon_chat(prompt, opts)
+      else
+        result = Runtime.chat(prompt, opts)
+        emit_value(result, opts, fn -> render_chat_result(result) end)
+        chat_exit_code(result)
+      end
     else
-      result = Runtime.chat(prompt, opts)
-      emit_value(result, opts, fn -> render_chat_result(result) end)
-      chat_exit_code(result)
+      {:error, reason} ->
+        emit_error(session_store_error(reason), opts)
+        1
     end
   end
 
@@ -536,7 +671,8 @@ defmodule ClawCode.CLI do
 
   defp run_cancel(session_ref, rest) do
     with {:ok, opts, _args} <- parse_opts(rest),
-         {:ok, session_id} <- expand_session_ref(session_ref, opts) do
+         {:ok, session_id} <- expand_session_ref(session_ref, opts),
+         :ok <- validate_session_state(Keyword.put(opts, :session_id, session_id)) do
       if Keyword.get(opts, :daemon, false) do
         run_daemon_cancel(session_id, opts)
       else
@@ -545,6 +681,10 @@ defmodule ClawCode.CLI do
     else
       {:error, :not_found} ->
         emit_error("Session not found: #{session_ref}", json_requested?(rest))
+        1
+
+      {:error, {:invalid_session, _details} = reason} ->
+        emit_error(session_store_error(reason), json_requested?(rest))
         1
 
       {:error, message} ->
@@ -567,6 +707,10 @@ defmodule ClawCode.CLI do
 
       {:error, :not_running} ->
         emit_error("Session is not running in this runtime: #{session_id}", opts)
+        1
+
+      {:error, {:invalid_session, _details} = reason} ->
+        emit_error(session_store_error(reason), opts)
         1
 
       {:error, message} when is_binary(message) ->
@@ -637,6 +781,7 @@ defmodule ClawCode.CLI do
       render_status_field("server_time", status["server_time"]),
       render_status_field("version", status["version"]),
       render_status_field("already_running", status["already_running"])
+      | daemon_health_lines(status["health"])
     ]
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join("\n")
@@ -653,6 +798,53 @@ defmodule ClawCode.CLI do
 
   defp render_status_field(_key, nil), do: nil
   defp render_status_field(key, value), do: "- #{key}: #{value}"
+
+  defp daemon_health_lines(nil), do: []
+
+  defp daemon_health_lines(health) when is_map(health) do
+    counts = health["counts"] || %{}
+    running = health["latest_running"]
+    failed = health["latest_failed"]
+    recovered = health["latest_recovered"]
+
+    [
+      "- health: #{Enum.join(health["signals"] || [], ", ")}",
+      "- sessions: total=#{counts["total"] || 0} running=#{counts["running"] || 0} completed=#{counts["completed"] || 0} failed=#{counts["failed"] || 0} recovered=#{counts["recovered"] || 0} invalid=#{counts["invalid"] || 0}",
+      render_health_session("latest_running", running),
+      render_health_receipt("latest_running", running),
+      render_health_session("latest_failed", failed),
+      render_health_receipt("latest_failed", failed),
+      render_health_session("latest_recovered", recovered),
+      render_health_receipt("latest_recovered", recovered)
+    ]
+  end
+
+  defp render_health_session(_label, nil), do: nil
+
+  defp render_health_session(label, entry) do
+    [
+      "- #{label}: #{entry["id"]}",
+      "provider=#{entry["provider"] || "unknown"}",
+      "stop=#{entry["stop_reason"] || "unknown"}",
+      "run=#{entry["run"] || entry["run_status"] || "unknown"}",
+      "updated=#{entry["updated_at"] || "-"}",
+      render_health_detail(entry["detail"])
+    ]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join(" ")
+  end
+
+  defp render_health_receipt(_label, nil), do: nil
+  defp render_health_receipt(_label, %{"last_receipt" => nil}), do: nil
+
+  defp render_health_receipt(label, entry) do
+    receipt = entry["last_receipt"]
+
+    "- #{label}_receipt: #{receipt["tool"] || "unknown"} #{receipt["status"] || "unknown"} #{receipt["duration_ms"] || "-"}ms #{receipt["started_at"] || "-"}"
+  end
+
+  defp render_health_detail("-"), do: nil
+  defp render_health_detail(detail), do: "detail=#{detail}"
 
   defp session_root_opt(opts) do
     Keyword.get(opts, :session_root, SessionStore.root_dir())
@@ -765,12 +957,19 @@ defmodule ClawCode.CLI do
 
   defp validate_provider(opts, args) do
     provider = OpenAICompatible.resolve_config(opts).provider
+    vision_provider = opts[:vision_provider]
 
-    if OpenAICompatible.valid_provider?(provider) do
-      {:ok, normalize_opts(opts), args}
-    else
-      {:error,
-       "Unknown provider: #{provider}. Expected one of: #{Enum.join(OpenAICompatible.providers(), ", ")}"}
+    cond do
+      not OpenAICompatible.valid_provider?(provider) ->
+        {:error,
+         "Unknown provider: #{provider}. Expected one of: #{Enum.join(OpenAICompatible.providers(), ", ")}"}
+
+      is_binary(vision_provider) and not OpenAICompatible.valid_provider?(vision_provider) ->
+        {:error,
+         "Unknown vision provider: #{vision_provider}. Expected one of: #{Enum.join(OpenAICompatible.providers(), ", ")}"}
+
+      true ->
+        {:ok, normalize_opts(opts), args}
     end
   end
 
@@ -807,6 +1006,19 @@ defmodule ClawCode.CLI do
   defp normalize_cancel({:error, :not_running}), do: {:error, :not_running}
   defp normalize_cancel({:error, :not_found}), do: {:error, :not_found}
   defp normalize_cancel(other), do: other
+
+  defp validate_session_state(opts) do
+    case Keyword.get(opts, :session_id) do
+      nil ->
+        :ok
+
+      session_id ->
+        case SessionStore.fetch(session_id, root: session_root_opt(opts)) do
+          {:error, {:invalid_session, _details} = reason} -> {:error, reason}
+          _other -> :ok
+        end
+    end
+  end
 
   defp normalize_opts(opts) do
     opts
@@ -850,6 +1062,19 @@ defmodule ClawCode.CLI do
     Jason.encode!(json_safe(value), pretty: true)
   end
 
+  defp map_value(map, key, default \\ nil) when is_map(map) do
+    case Map.get(map, key, Map.get(map, Atom.to_string(key), default)) do
+      nil -> default
+      value -> value
+    end
+  end
+
+  defp session_store_error({:invalid_session, _details} = reason),
+    do: SessionStore.error_message(reason)
+
+  defp session_store_error(reason) when is_binary(reason), do: reason
+  defp session_store_error(reason), do: inspect(reason)
+
   defp json_safe(%_struct{} = struct), do: struct |> Map.from_struct() |> json_safe()
 
   defp json_safe(map) when is_map(map) do
@@ -880,23 +1105,25 @@ defmodule ClawCode.CLI do
     [
       "# Probe",
       "",
-      "- status: #{payload.status}",
-      "- provider: #{payload.provider}",
-      "- configured: #{payload.configured}",
-      "- auth_mode: #{payload.auth_mode}",
-      "- tool_support: #{payload.tool_support}",
-      "- payload_modes: #{Enum.join(payload.payload_modes || [], ", ")}",
-      "- fallback_modes: #{render_missing_fields(payload.fallback_modes || [])}",
-      "- provider_aliases: #{render_missing_fields(payload.provider_aliases || [])}",
-      "- request_url: #{payload.request_url || "missing"}",
-      "- model: #{payload.model || "missing"}",
-      "- request_mode: #{payload.request_mode || "standard"}",
-      if(payload[:latency_ms], do: "- latency_ms: #{payload.latency_ms}"),
-      if(payload[:response_preview],
-        do: "- response: #{summarize_text(payload.response_preview)}"
+      "- status: #{map_value(payload, :status)}",
+      "- provider: #{map_value(payload, :provider)}",
+      "- configured: #{map_value(payload, :configured)}",
+      "- auth_mode: #{map_value(payload, :auth_mode)}",
+      "- tool_support: #{map_value(payload, :tool_support)}",
+      "- input_modalities: #{render_missing_fields(map_value(payload, :input_modalities, []))}",
+      "- request_modalities: #{render_missing_fields(map_value(payload, :request_modalities, []))}",
+      "- payload_modes: #{Enum.join(map_value(payload, :payload_modes, []), ", ")}",
+      "- fallback_modes: #{render_missing_fields(map_value(payload, :fallback_modes, []))}",
+      "- provider_aliases: #{render_missing_fields(map_value(payload, :provider_aliases, []))}",
+      "- request_url: #{map_value(payload, :request_url, "missing")}",
+      "- model: #{map_value(payload, :model, "missing")}",
+      "- request_mode: #{map_value(payload, :request_mode, "standard")}",
+      if(map_value(payload, :latency_ms), do: "- latency_ms: #{map_value(payload, :latency_ms)}"),
+      if(map_value(payload, :response_preview),
+        do: "- response: #{summarize_text(map_value(payload, :response_preview))}"
       ),
-      if(payload[:error], do: "- error: #{payload.error}"),
-      "- missing: #{render_missing_fields(payload.missing || [])}"
+      if(map_value(payload, :error), do: "- error: #{map_value(payload, :error)}"),
+      "- missing: #{render_missing_fields(map_value(payload, :missing, []))}"
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n")
@@ -913,7 +1140,8 @@ defmodule ClawCode.CLI do
       summary
       manifest
       doctor [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--api-key-header HEADER] [--tools|--no-tools] [--json]
-      probe [prompt] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--api-key-header HEADER] [--json]
+      providers [--json]
+      probe [prompt] [--image PATH]... [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--api-key-header HEADER] [--json]
       daemon serve [--daemon-root PATH] [--session-root PATH]
       daemon start [--daemon-root PATH] [--session-root PATH] [--json]
       daemon status [--daemon-root PATH] [--json]
@@ -923,8 +1151,8 @@ defmodule ClawCode.CLI do
       tools [--limit N] [--query TEXT] [--deny-tool NAME] [--deny-prefix PREFIX]
       route <prompt> [--limit N] [--native|--no-native]
       bootstrap <prompt> [--limit N] [--native|--no-native]
-      chat <prompt> [--daemon] [--session-id ID] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--api-key-header HEADER] [--max-turns N] [--allow-shell] [--allow-write] [--tools|--no-tools] [--native|--no-native] [--session-root PATH] [--daemon-root PATH] [--json]
-      resume-session <session_id|latest|running|latest-running|completed|latest-completed|failed|latest-failed|N> <prompt> [--daemon] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--api-key-header HEADER] [--max-turns N] [--allow-shell] [--allow-write] [--tools|--no-tools] [--native|--no-native] [--session-root PATH] [--daemon-root PATH] [--json]
+      chat <prompt> [--image PATH]... [--daemon] [--session-id ID] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--api-key-header HEADER] [--vision-provider glm|nim|kimi|generic] [--vision-model MODEL] [--vision-base-url URL] [--vision-api-key KEY] [--vision-api-key-header HEADER] [--max-turns N] [--allow-shell] [--allow-write] [--tools|--no-tools] [--native|--no-native] [--session-root PATH] [--daemon-root PATH] [--json]
+      resume-session <session_id|latest|running|latest-running|completed|latest-completed|failed|latest-failed|N> <prompt> [--image PATH]... [--daemon] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--api-key-header HEADER] [--vision-provider glm|nim|kimi|generic] [--vision-model MODEL] [--vision-base-url URL] [--vision-api-key KEY] [--vision-api-key-header HEADER] [--max-turns N] [--allow-shell] [--allow-write] [--tools|--no-tools] [--native|--no-native] [--session-root PATH] [--daemon-root PATH] [--json]
       cancel-session <session_id|latest|running|latest-running|completed|latest-completed|failed|latest-failed|N> [--daemon] [--session-root PATH] [--daemon-root PATH] [--json]
       symphony <prompt> [--limit N] [--native|--no-native]
       tui [--limit N] [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--api-key-header HEADER] [--tools|--no-tools] [--daemon-root PATH] [--session-root PATH]

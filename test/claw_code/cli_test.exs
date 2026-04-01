@@ -16,6 +16,7 @@ defmodule ClawCode.CLITest do
     assert output =~ "- configured:"
     assert output =~ "- auth_mode:"
     assert output =~ "- tool_support:"
+    assert output =~ "- input_modalities:"
     assert output =~ "- request_url:"
     assert output =~ "- missing:"
   end
@@ -29,6 +30,7 @@ defmodule ClawCode.CLITest do
     payload = Jason.decode!(output)
     assert payload["provider"] == "generic"
     assert payload["tool_policy"] == "disabled"
+    assert payload["input_modalities"] == ["text", "image"]
   end
 
   test "doctor accepts provider flags" do
@@ -58,6 +60,30 @@ defmodule ClawCode.CLITest do
     assert output =~ "- api_key_header: api-key"
   end
 
+  test "providers renders the supported provider matrix" do
+    output = capture_io(fn -> assert CLI.run(["providers"]) == 0 end)
+
+    assert output =~ "# Providers"
+    assert output =~ "## generic"
+    assert output =~ "## glm"
+    assert output =~ "## kimi"
+    assert output =~ "## nim"
+    assert output =~ "- input_modalities: text, image"
+    assert output =~ "- setup_template: .env.local.example"
+  end
+
+  test "providers can render json" do
+    output =
+      capture_io(fn ->
+        assert CLI.run(["providers", "--json"]) == 0
+      end)
+
+    payload = Jason.decode!(output)
+    assert payload["setup_template"] == ".env.local.example"
+    assert Enum.map(payload["providers"], & &1["provider"]) == ["generic", "glm", "nim", "kimi"]
+    assert Enum.all?(payload["providers"], &(&1["input_modalities"] == ["text", "image"]))
+  end
+
   test "doctor renders explicit tool policy" do
     output =
       capture_io(fn ->
@@ -65,6 +91,16 @@ defmodule ClawCode.CLITest do
       end)
 
     assert output =~ "- tool_policy: disabled"
+  end
+
+  test "doctor renders explicit shell and write access" do
+    output =
+      capture_io(fn ->
+        assert CLI.run(["doctor", "--provider", "generic", "--allow-shell", "--allow-write"]) == 0
+      end)
+
+    assert output =~ "- shell_access: enabled"
+    assert output =~ "- write_access: enabled"
   end
 
   test "probe renders provider connectivity" do
@@ -97,6 +133,7 @@ defmodule ClawCode.CLITest do
 
     assert output =~ "# Probe"
     assert output =~ "- status: ok"
+    assert output =~ "- request_modalities: text"
     assert output =~ "- request_mode: standard"
     assert output =~ "- response: probe-ok"
   end
@@ -112,6 +149,91 @@ defmodule ClawCode.CLITest do
     assert payload["provider"] == "generic"
   end
 
+  test "probe renders text failures for missing provider config without crashing" do
+    output =
+      capture_io(fn ->
+        assert CLI.run(["probe", "--provider", "generic"]) == 1
+      end)
+
+    assert output =~ "# Probe"
+    assert output =~ "- status: missing_config"
+    assert output =~ "- request_modalities: text"
+    assert output =~ "- request_mode: standard"
+    assert output =~ "- error: missing provider configuration"
+  end
+
+  test "probe renders multimodal request modalities when image input is provided" do
+    root = Path.join(System.tmp_dir!(), "claw-code-cli-probe-image-#{SessionStore.new_id()}")
+    File.rm_rf(root)
+    File.mkdir_p!(root)
+
+    on_exit(fn -> File.rm_rf(root) end)
+
+    image_path = write_png(root, "probe-image.png")
+
+    {base_url, listener, server} =
+      start_stub_server(
+        [
+          Jason.encode!(%{
+            "choices" => [%{"message" => %{"role" => "assistant", "content" => "probe-image-ok"}}]
+          })
+        ],
+        capture_requests: true
+      )
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    output =
+      capture_io(fn ->
+        assert CLI.run([
+                 "probe",
+                 "--provider",
+                 "generic",
+                 "--base-url",
+                 base_url,
+                 "--model",
+                 "local-model",
+                 "--image",
+                 image_path,
+                 "describe this image"
+               ]) == 0
+      end)
+
+    assert output =~ "# Probe"
+    assert output =~ "- status: ok"
+    assert output =~ "- request_modalities: text, image"
+
+    assert_receive {:request, request}, 1_000
+    assert request =~ "\"type\":\"image_url\""
+    assert request =~ "data:image/png;base64,"
+  end
+
+  test "probe fails explicitly when an image input path is missing" do
+    output =
+      capture_io(fn ->
+        assert CLI.run([
+                 "probe",
+                 "--provider",
+                 "generic",
+                 "--base-url",
+                 "http://127.0.0.1:1/v1",
+                 "--model",
+                 "local-model",
+                 "--image",
+                 "missing-image.png",
+                 "describe this image"
+               ]) == 1
+      end)
+
+    assert output =~ "# Probe"
+    assert output =~ "- status: invalid_input"
+    assert output =~ "- request_modalities: text, image"
+    assert output =~ "Image input does not exist"
+  end
+
   test "chat accepts explicit tool policy flags" do
     output =
       capture_io(fn ->
@@ -119,6 +241,75 @@ defmodule ClawCode.CLITest do
       end)
 
     assert output =~ "Stop reason: missing_provider_config"
+  end
+
+  test "chat fails explicitly when an image input path is missing" do
+    output =
+      capture_io(fn ->
+        assert CLI.run([
+                 "chat",
+                 "--provider",
+                 "generic",
+                 "--base-url",
+                 "http://127.0.0.1:1/v1",
+                 "--model",
+                 "local-model",
+                 "--image",
+                 "missing-image.png",
+                 "describe this image"
+               ]) == 1
+      end)
+
+    assert output =~ "Stop reason: invalid_image_input"
+    assert output =~ "Image input does not exist"
+  end
+
+  test "load-session renders multimodal user content in message view" do
+    root = Path.join(System.tmp_dir!(), "claw-code-cli-load-session-multimodal-test")
+    previous_root = Application.get_env(:claw_code, :session_root)
+
+    on_exit(fn ->
+      if is_nil(previous_root) do
+        Application.delete_env(:claw_code, :session_root)
+      else
+        Application.put_env(:claw_code, :session_root, previous_root)
+      end
+
+      File.rm_rf(root)
+    end)
+
+    Application.put_env(:claw_code, :session_root, root)
+
+    path =
+      SessionStore.save(
+        %{
+          id: "session-multimodal",
+          messages: [
+            %{
+              "role" => "user",
+              "content" => [
+                %{"type" => "text", "text" => "inspect screenshot"},
+                %{
+                  "type" => "input_image",
+                  "path" => "/tmp/example-diagram.png",
+                  "mime_type" => "image/png"
+                }
+              ]
+            }
+          ]
+        },
+        root: root
+      )
+
+    session_id = Path.basename(path, ".json")
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["load-session", session_id, "--show-messages"]) == 0
+      end)
+
+    assert output =~ "Messages:"
+    assert output =~ "1. user: inspect screenshot [image:example-diagram.png]"
   end
 
   test "daemon status reports stopped when no daemon is running" do
@@ -188,6 +379,117 @@ defmodule ClawCode.CLITest do
 
     assert output =~ "# Daemon"
     assert output =~ "- status: stale"
+  end
+
+  test "daemon status reports recovered abandoned running sessions after startup" do
+    daemon_root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-daemon-health-#{SessionStore.new_id()}")
+
+    session_root =
+      Path.join(
+        System.tmp_dir!(),
+        "claw-code-cli-daemon-health-sessions-#{SessionStore.new_id()}"
+      )
+
+    previous_session_root = Application.get_env(:claw_code, :session_root)
+    previous_daemon_root = Application.get_env(:claw_code, :daemon_root)
+
+    on_exit(fn ->
+      if is_nil(previous_session_root) do
+        Application.delete_env(:claw_code, :session_root)
+      else
+        Application.put_env(:claw_code, :session_root, previous_session_root)
+      end
+
+      if is_nil(previous_daemon_root) do
+        Application.delete_env(:claw_code, :daemon_root)
+      else
+        Application.put_env(:claw_code, :daemon_root, previous_daemon_root)
+      end
+
+      case Daemon.stop(daemon_root: daemon_root) do
+        {:ok, _result} -> :ok
+        _other -> :ok
+      end
+
+      File.rm_rf(session_root)
+      File.rm_rf(daemon_root)
+    end)
+
+    Application.put_env(:claw_code, :session_root, session_root)
+    Application.put_env(:claw_code, :daemon_root, daemon_root)
+    File.rm_rf(session_root)
+    File.rm_rf(daemon_root)
+
+    SessionStore.save(
+      %{
+        id: "session-running",
+        stop_reason: "running",
+        provider: %{"provider" => "glm", "model" => "GLM-4.7"},
+        run_state: %{"status" => "running", "started_at" => "2026-04-01T00:01:00Z"},
+        messages: []
+      },
+      root: session_root
+    )
+
+    SessionStore.save(
+      %{
+        id: "session-failed",
+        stop_reason: "provider_error",
+        provider: %{"provider" => "generic", "model" => "test-model"},
+        output: "provider request failed with status 401: unauthorized",
+        run_state: %{"status" => "idle", "last_stop_reason" => "provider_error"},
+        tool_receipts: [
+          %{
+            "tool_name" => "shell",
+            "status" => "ok",
+            "duration_ms" => 42,
+            "started_at" => "2026-04-01T00:03:00Z"
+          }
+        ],
+        messages: []
+      },
+      root: session_root
+    )
+
+    SessionStore.save(
+      %{
+        id: "session-recovered",
+        stop_reason: "run_interrupted",
+        provider: %{"provider" => "nim", "model" => "meta/llama-3.1-8b-instruct"},
+        output: "Session run interrupted during recovery.",
+        run_state: %{"status" => "idle", "last_stop_reason" => "run_interrupted"},
+        messages: []
+      },
+      root: session_root
+    )
+
+    {:ok, daemon_task} =
+      Task.start_link(fn ->
+        Daemon.serve(daemon_root: daemon_root, session_root: session_root)
+      end)
+
+    on_exit(fn ->
+      if Process.alive?(daemon_task), do: Process.exit(daemon_task, :kill)
+    end)
+
+    assert wait_until(fn ->
+             match?({:ok, %{"status" => "running"}}, Daemon.status(daemon_root: daemon_root))
+           end)
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["daemon", "status", "--daemon-root", daemon_root]) == 0
+      end)
+
+    assert output =~ "# Daemon"
+    assert output =~ "- status: running"
+    assert output =~ "- health: failed, partially_recovered"
+    assert output =~ "- sessions: total=3 running=0 completed=0 failed=1 recovered=2 invalid=0"
+    assert output =~ "- latest_failed: session-failed provider=generic stop=provider_error"
+    assert output =~ "detail=provider request failed with status 401: unauthorized"
+    assert output =~ "- latest_failed_receipt: shell ok 42ms 2026-04-01T00:03:00Z"
+    assert output =~ "- latest_recovered: session-running provider=glm stop=run_interrupted"
   end
 
   test "commands and tools commands render indexes" do
@@ -434,6 +736,69 @@ defmodule ClawCode.CLITest do
     assert output =~ "output=world"
   end
 
+  test "load-session renders permission snapshots and blocked receipt policy details" do
+    root = Path.join(System.tmp_dir!(), "claw-code-cli-load-session-permissions-test")
+    previous_root = Application.get_env(:claw_code, :session_root)
+
+    on_exit(fn ->
+      if is_nil(previous_root) do
+        Application.delete_env(:claw_code, :session_root)
+      else
+        Application.put_env(:claw_code, :session_root, previous_root)
+      end
+    end)
+
+    Application.put_env(:claw_code, :session_root, root)
+
+    path =
+      SessionStore.save(
+        %{
+          id: "session-permissions",
+          prompt: "dangerous shell request",
+          output: "blocked",
+          stop_reason: "completed",
+          provider: %{"provider" => "glm", "model" => "glm-4.7"},
+          permissions: %{
+            "tool_policy" => "enabled",
+            "allow_shell" => true,
+            "allow_write" => false,
+            "deny_tools" => [],
+            "deny_prefixes" => []
+          },
+          run_state: %{"status" => "idle"},
+          messages: [
+            %{"role" => "user", "content" => "run rm -rf"}
+          ],
+          tool_receipts: [
+            %{
+              "started_at" => "2026-04-01T00:00:00Z",
+              "tool_name" => "shell",
+              "status" => "blocked",
+              "exit_status" => "blocked",
+              "output" => "shell command blocked by policy: rm -rf /tmp/example",
+              "policy" => %{
+                "decision" => "blocked",
+                "rule" => "blocked_shell_prefix",
+                "blocked_prefix" => "rm",
+                "allow_shell" => true
+              }
+            }
+          ]
+        },
+        root: root
+      )
+
+    session_id = Path.basename(path, ".json")
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["load-session", session_id, "--show-receipts"]) == 0
+      end)
+
+    assert output =~ "permissions=tool_policy=enabled shell=enabled write=disabled"
+    assert output =~ "policy=blocked_shell_prefix:rm"
+  end
+
   test "load-session accepts latest-completed alias" do
     root = Path.join(System.tmp_dir!(), "claw-code-cli-load-session-alias-test")
     previous_root = Application.get_env(:claw_code, :session_root)
@@ -615,6 +980,329 @@ defmodule ClawCode.CLITest do
     assert output =~ "# Chat Result"
     assert output =~ "Stop reason: completed"
     assert output =~ "daemon reply"
+  end
+
+  test "daemon chat returns 1 when the client tries to override the daemon session_root" do
+    session_root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-daemon-root-#{SessionStore.new_id()}")
+
+    conflicting_root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-daemon-root-conflict-#{SessionStore.new_id()}")
+
+    daemon_root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-daemon-root-meta-#{SessionStore.new_id()}")
+
+    previous_session_root = Application.get_env(:claw_code, :session_root)
+    previous_daemon_root = Application.get_env(:claw_code, :daemon_root)
+
+    on_exit(fn ->
+      if is_nil(previous_session_root) do
+        Application.delete_env(:claw_code, :session_root)
+      else
+        Application.put_env(:claw_code, :session_root, previous_session_root)
+      end
+
+      if is_nil(previous_daemon_root) do
+        Application.delete_env(:claw_code, :daemon_root)
+      else
+        Application.put_env(:claw_code, :daemon_root, previous_daemon_root)
+      end
+
+      case Daemon.stop(daemon_root: daemon_root) do
+        {:ok, _result} -> :ok
+        _other -> :ok
+      end
+
+      File.rm_rf(session_root)
+      File.rm_rf(conflicting_root)
+      File.rm_rf(daemon_root)
+    end)
+
+    Application.put_env(:claw_code, :session_root, session_root)
+    Application.put_env(:claw_code, :daemon_root, daemon_root)
+    File.rm_rf(session_root)
+    File.rm_rf(conflicting_root)
+    File.rm_rf(daemon_root)
+
+    {:ok, daemon_task} =
+      Task.start_link(fn ->
+        Daemon.serve(daemon_root: daemon_root, session_root: session_root)
+      end)
+
+    on_exit(fn ->
+      if Process.alive?(daemon_task), do: Process.exit(daemon_task, :kill)
+    end)
+
+    assert wait_until(fn ->
+             match?({:ok, %{"status" => "running"}}, Daemon.status(daemon_root: daemon_root))
+           end)
+
+    output =
+      capture_io(fn ->
+        assert CLI.run([
+                 "chat",
+                 "--daemon",
+                 "--session-root",
+                 conflicting_root,
+                 "--provider",
+                 "generic",
+                 "--base-url",
+                 "http://127.0.0.1:1/v1",
+                 "--api-key",
+                 "test-key",
+                 "--model",
+                 "test-model",
+                 "hello"
+               ]) == 1
+      end)
+
+    assert output =~ "Daemon session root mismatch"
+    assert output =~ session_root
+    assert output =~ conflicting_root
+  end
+
+  test "daemon-backed chat forwards repeated image inputs to the provider boundary" do
+    session_root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-daemon-image-#{SessionStore.new_id()}")
+
+    daemon_root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-daemon-image-meta-#{SessionStore.new_id()}")
+
+    previous_session_root = Application.get_env(:claw_code, :session_root)
+    previous_daemon_root = Application.get_env(:claw_code, :daemon_root)
+
+    on_exit(fn ->
+      if is_nil(previous_session_root) do
+        Application.delete_env(:claw_code, :session_root)
+      else
+        Application.put_env(:claw_code, :session_root, previous_session_root)
+      end
+
+      if is_nil(previous_daemon_root) do
+        Application.delete_env(:claw_code, :daemon_root)
+      else
+        Application.put_env(:claw_code, :daemon_root, previous_daemon_root)
+      end
+
+      case Daemon.stop(daemon_root: daemon_root) do
+        {:ok, _result} -> :ok
+        _other -> :ok
+      end
+
+      File.rm_rf(session_root)
+      File.rm_rf(daemon_root)
+    end)
+
+    Application.put_env(:claw_code, :session_root, session_root)
+    Application.put_env(:claw_code, :daemon_root, daemon_root)
+    File.rm_rf(session_root)
+    File.rm_rf(daemon_root)
+    File.mkdir_p!(session_root)
+
+    image_one = write_png(session_root, "image-one.png")
+    image_two = write_png(session_root, "image-two.png")
+
+    {base_url, listener, server} =
+      start_stub_server(
+        [
+          Jason.encode!(%{
+            "choices" => [
+              %{
+                "message" => %{
+                  "role" => "assistant",
+                  "content" => "vision reply"
+                }
+              }
+            ]
+          })
+        ],
+        capture_requests: true
+      )
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    {:ok, daemon_task} =
+      Task.start_link(fn ->
+        Daemon.serve(daemon_root: daemon_root, session_root: session_root)
+      end)
+
+    on_exit(fn ->
+      if Process.alive?(daemon_task), do: Process.exit(daemon_task, :kill)
+    end)
+
+    assert wait_until(fn ->
+             match?({:ok, %{"status" => "running"}}, Daemon.status(daemon_root: daemon_root))
+           end)
+
+    output =
+      capture_io(fn ->
+        assert CLI.run([
+                 "chat",
+                 "--daemon",
+                 "--provider",
+                 "generic",
+                 "--base-url",
+                 base_url,
+                 "--api-key",
+                 "test-key",
+                 "--model",
+                 "test-model",
+                 "--image",
+                 image_one,
+                 "--image",
+                 image_two,
+                 "describe both images"
+               ]) == 0
+      end)
+
+    assert output =~ "Stop reason: completed"
+    assert output =~ "vision reply"
+
+    assert_receive {:request, request}, 1_000
+    assert length(Regex.scan(~r/data:image\/png;base64,/, request)) == 2
+    assert request =~ "\"type\":\"image_url\""
+    assert request =~ "describe both images"
+  end
+
+  test "daemon-backed chat can split reasoning and vision backbones" do
+    session_root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-daemon-vision-#{SessionStore.new_id()}")
+
+    daemon_root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-daemon-vision-meta-#{SessionStore.new_id()}")
+
+    previous_session_root = Application.get_env(:claw_code, :session_root)
+    previous_daemon_root = Application.get_env(:claw_code, :daemon_root)
+
+    on_exit(fn ->
+      if is_nil(previous_session_root) do
+        Application.delete_env(:claw_code, :session_root)
+      else
+        Application.put_env(:claw_code, :session_root, previous_session_root)
+      end
+
+      if is_nil(previous_daemon_root) do
+        Application.delete_env(:claw_code, :daemon_root)
+      else
+        Application.put_env(:claw_code, :daemon_root, previous_daemon_root)
+      end
+
+      case Daemon.stop(daemon_root: daemon_root) do
+        {:ok, _result} -> :ok
+        _other -> :ok
+      end
+
+      File.rm_rf(session_root)
+      File.rm_rf(daemon_root)
+    end)
+
+    Application.put_env(:claw_code, :session_root, session_root)
+    Application.put_env(:claw_code, :daemon_root, daemon_root)
+    File.rm_rf(session_root)
+    File.rm_rf(daemon_root)
+    File.mkdir_p!(session_root)
+
+    image_path = write_png(session_root, "vision-split.png")
+
+    {vision_base_url, vision_listener, vision_server} =
+      start_stub_server(
+        [
+          Jason.encode!(%{
+            "choices" => [
+              %{
+                "message" => %{
+                  "role" => "assistant",
+                  "content" => "a red warning dialog with two buttons"
+                }
+              }
+            ]
+          })
+        ],
+        capture_requests: true
+      )
+
+    {base_url, listener, server} =
+      start_stub_server(
+        [
+          Jason.encode!(%{
+            "choices" => [
+              %{
+                "message" => %{
+                  "role" => "assistant",
+                  "content" => "reasoned answer"
+                }
+              }
+            ]
+          })
+        ],
+        capture_requests: true
+      )
+
+    on_exit(fn ->
+      send(vision_server, :stop)
+      :gen_tcp.close(vision_listener)
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    {:ok, daemon_task} =
+      Task.start_link(fn ->
+        Daemon.serve(daemon_root: daemon_root, session_root: session_root)
+      end)
+
+    on_exit(fn ->
+      if Process.alive?(daemon_task), do: Process.exit(daemon_task, :kill)
+    end)
+
+    assert wait_until(fn ->
+             match?({:ok, %{"status" => "running"}}, Daemon.status(daemon_root: daemon_root))
+           end)
+
+    output =
+      capture_io(fn ->
+        assert CLI.run([
+                 "chat",
+                 "--daemon",
+                 "--provider",
+                 "glm",
+                 "--base-url",
+                 base_url,
+                 "--api-key",
+                 "glm-test-key",
+                 "--model",
+                 "GLM-5.1",
+                 "--vision-provider",
+                 "kimi",
+                 "--vision-base-url",
+                 vision_base_url,
+                 "--vision-api-key",
+                 "kimi-test-key",
+                 "--vision-model",
+                 "kimi-k2.5",
+                 "--image",
+                 image_path,
+                 "describe this screenshot"
+               ]) == 0
+      end)
+
+    assert output =~ "Stop reason: completed"
+    assert output =~ "Vision backbone: kimi/kimi-k2.5"
+    assert output =~ "reasoned answer"
+
+    assert_receive {:request, vision_request}, 1_000
+    assert vision_request =~ "\"model\":\"kimi-k2.5\""
+    assert vision_request =~ "\"type\":\"image_url\""
+
+    assert_receive {:request, primary_request}, 1_000
+    assert primary_request =~ "\"model\":\"GLM-5.1\""
+
+    assert primary_request =~
+             "Vision context from kimi/kimi-k2.5: a red warning dialog with two buttons"
+
+    refute primary_request =~ "\"type\":\"image_url\""
   end
 
   test "daemon chat forwards explicit no-tools policy" do
@@ -1140,6 +1828,72 @@ defmodule ClawCode.CLITest do
     assert output =~ "Session not found: missing-session"
   end
 
+  test "load-session returns 1 with a local invalid-session message for corrupted state" do
+    root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-invalid-load-test-#{SessionStore.new_id()}")
+
+    previous_root = Application.get_env(:claw_code, :session_root)
+
+    on_exit(fn ->
+      if is_nil(previous_root) do
+        Application.delete_env(:claw_code, :session_root)
+      else
+        Application.put_env(:claw_code, :session_root, previous_root)
+      end
+
+      File.rm_rf(root)
+    end)
+
+    Application.put_env(:claw_code, :session_root, root)
+    File.rm_rf(root)
+    File.mkdir_p!(root)
+    File.write!(Path.join(root, "broken-cli-session.json"), "{not-json")
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["load-session", "broken-cli-session"]) == 1
+      end)
+
+    assert output =~ "Session state is invalid for broken-cli-session"
+    assert output =~ Path.join(root, "broken-cli-session.json")
+  end
+
+  test "resume-session returns 1 with a local invalid-session message for corrupted state" do
+    root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-invalid-resume-test-#{SessionStore.new_id()}")
+
+    previous_root = Application.get_env(:claw_code, :session_root)
+
+    on_exit(fn ->
+      if is_nil(previous_root) do
+        Application.delete_env(:claw_code, :session_root)
+      else
+        Application.put_env(:claw_code, :session_root, previous_root)
+      end
+
+      File.rm_rf(root)
+    end)
+
+    Application.put_env(:claw_code, :session_root, root)
+    File.rm_rf(root)
+    File.mkdir_p!(root)
+    File.write!(Path.join(root, "broken-cli-resume.json"), "{not-json")
+
+    output =
+      capture_io(fn ->
+        assert CLI.run([
+                 "resume-session",
+                 "broken-cli-resume",
+                 "--provider",
+                 "generic",
+                 "continue"
+               ]) ==
+                 1
+      end)
+
+    assert output =~ "Session state is invalid for broken-cli-resume"
+  end
+
   test "chat returns 1 when provider configuration is missing" do
     output =
       capture_io(fn ->
@@ -1167,6 +1921,15 @@ defmodule ClawCode.CLITest do
       end)
 
     assert output =~ "Unknown provider: kimii"
+  end
+
+  test "chat rejects an unknown vision provider" do
+    output =
+      capture_io(fn ->
+        assert CLI.run(["chat", "--provider", "glm", "--vision-provider", "kimii", "hello"]) == 1
+      end)
+
+    assert output =~ "Unknown vision provider: kimii"
   end
 
   test "chat renders json errors when requested" do
@@ -1286,4 +2049,17 @@ defmodule ClawCode.CLITest do
   end
 
   defp wait_until(_fun, 0), do: false
+
+  defp write_png(root, name) do
+    path = Path.join(root, name)
+
+    File.write!(
+      path,
+      Base.decode64!(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7+X3cAAAAASUVORK5CYII="
+      )
+    )
+
+    path
+  end
 end

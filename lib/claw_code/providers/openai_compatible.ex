@@ -1,4 +1,6 @@
 defmodule ClawCode.Providers.OpenAICompatible do
+  alias ClawCode.Multimodal
+
   @default_connect_timeout_ms 5_000
   @default_request_timeout_ms 30_000
   @providers ~w(generic glm nim kimi)
@@ -33,6 +35,38 @@ defmodule ClawCode.Providers.OpenAICompatible do
       api_key_header: opts[:api_key_header] || provider_api_key_header(provider),
       model: opts[:model] || provider_model(provider)
     }
+  end
+
+  def resolve_vision_config(opts \\ [], primary_config \\ nil) do
+    primary_config = primary_config || resolve_config(opts)
+
+    if vision_requested?(opts) do
+      provider =
+        normalize_provider(
+          opts[:vision_provider] ||
+            env("CLAW_VISION_PROVIDER") ||
+            primary_config.provider
+        )
+
+      %__MODULE__{
+        provider: provider,
+        base_url:
+          vision_opt(opts, :vision_base_url, "CLAW_VISION_BASE_URL") ||
+            shared_primary_value(primary_config, provider, :base_url) ||
+            provider_base_url(provider),
+        api_key:
+          vision_opt(opts, :vision_api_key, "CLAW_VISION_API_KEY") ||
+            shared_primary_value(primary_config, provider, :api_key) ||
+            provider_api_key(provider),
+        api_key_header:
+          vision_opt(opts, :vision_api_key_header, "CLAW_VISION_API_KEY_HEADER") ||
+            shared_primary_value(primary_config, provider, :api_key_header) ||
+            provider_api_key_header(provider),
+        model:
+          vision_opt(opts, :vision_model, "CLAW_VISION_MODEL") ||
+            provider_model(provider)
+      }
+    end
   end
 
   def configured?(%__MODULE__{} = config) do
@@ -83,28 +117,37 @@ defmodule ClawCode.Providers.OpenAICompatible do
 
   def chat(%__MODULE__{} = config, messages, opts \\ []) do
     tools = Keyword.get(opts, :tools, [])
-    payload = chat_payload(config, messages, tools, :standard)
+    drop_input_images? = Keyword.get(opts, :drop_input_images, false)
 
-    case request(config, payload) do
-      {:ok, response} ->
-        {:ok, Map.put(response, "_claw_request_mode", "standard")}
+    with {:ok, normalized_messages} <-
+           Multimodal.normalize_messages_for_provider(
+             messages,
+             drop_input_images: drop_input_images?
+           ) do
+      payload = chat_payload(config, normalized_messages, tools, :standard)
 
-      {:error, reason} ->
-        if retry_minimal_payload?(config, reason) do
-          config
-          |> request(chat_payload(config, messages, [], :minimal))
-          |> case do
-            {:ok, response} -> {:ok, Map.put(response, "_claw_request_mode", "minimal")}
-            {:error, minimal_reason} -> {:error, minimal_reason}
+      case request(config, payload) do
+        {:ok, response} ->
+          {:ok, Map.put(response, "_claw_request_mode", "standard")}
+
+        {:error, reason} ->
+          if retry_minimal_payload?(config, reason) do
+            config
+            |> request(chat_payload(config, normalized_messages, [], :minimal))
+            |> case do
+              {:ok, response} -> {:ok, Map.put(response, "_claw_request_mode", "minimal")}
+              {:error, minimal_reason} -> {:error, minimal_reason}
+            end
+          else
+            {:error, reason}
           end
-        else
-          {:error, reason}
-        end
+      end
     end
   end
 
   def probe(opts \\ []) do
     config = resolve_config(opts)
+    image_inputs = Keyword.get_values(opts, :image)
 
     prompt =
       case Keyword.get(opts, :probe_prompt) || Keyword.get(opts, :prompt) do
@@ -114,6 +157,7 @@ defmodule ClawCode.Providers.OpenAICompatible do
       end
 
     diagnostics = diagnostics(opts)
+    request_modalities = probe_request_modalities(prompt, image_inputs)
 
     payload = %{
       provider: config.provider,
@@ -123,51 +167,62 @@ defmodule ClawCode.Providers.OpenAICompatible do
       model: config.model,
       auth_mode: diagnostics.profile.auth_mode,
       tool_support: diagnostics.profile.tool_support,
+      input_modalities: diagnostics.profile.input_modalities,
+      request_modalities: request_modalities,
       payload_modes: diagnostics.profile.payload_modes,
       fallback_modes: diagnostics.profile.fallback_modes,
       provider_aliases: diagnostics.profile.aliases,
       missing: diagnostics.missing_fields
     }
 
-    if configured?(config) do
-      started_at = System.monotonic_time(:millisecond)
+    with {:ok, content} <- Multimodal.build_user_content(prompt, image_inputs) do
+      if configured?(config) do
+        started_at = System.monotonic_time(:millisecond)
 
-      case chat(config, [%{"role" => "user", "content" => prompt}], tools: []) do
-        {:ok, response} ->
-          latency_ms = System.monotonic_time(:millisecond) - started_at
+        case chat(config, [%{"role" => "user", "content" => content}], tools: []) do
+          {:ok, response} ->
+            latency_ms = System.monotonic_time(:millisecond) - started_at
 
-          case assistant_message(response) do
-            {:ok, message} ->
-              {:ok,
-               Map.merge(payload, %{
-                 status: "ok",
-                 latency_ms: latency_ms,
-                 request_mode: request_mode(response),
-                 response_preview: message_content(message)
-               })}
+            case assistant_message(response) do
+              {:ok, message} ->
+                {:ok,
+                 Map.merge(payload, %{
+                   status: "ok",
+                   latency_ms: latency_ms,
+                   request_mode: request_mode(response),
+                   response_preview: message_content(message)
+                 })}
 
-            :error ->
-              {:error,
-               Map.merge(payload, %{
-                 status: "error",
-                 latency_ms: latency_ms,
-                 error: "provider returned no assistant message"
-               })}
-          end
+              :error ->
+                {:error,
+                 Map.merge(payload, %{
+                   status: "error",
+                   latency_ms: latency_ms,
+                   error: "provider returned no assistant message"
+                 })}
+            end
 
-        {:error, reason} ->
-          {:error,
-           Map.merge(payload, %{
-             status: "error",
-             error: reason
-           })}
+          {:error, reason} ->
+            {:error,
+             Map.merge(payload, %{
+               status: "error",
+               error: reason
+             })}
+        end
+      else
+        {:error,
+         Map.merge(payload, %{
+           status: "missing_config",
+           error: "missing provider configuration"
+         })}
       end
     else
-      {:error,
-       Map.merge(payload, %{
-         status: "missing_config",
-         error: "missing provider configuration"
-       })}
+      {:error, reason} ->
+        {:error,
+         Map.merge(payload, %{
+           status: "invalid_input",
+           error: reason
+         })}
     end
   end
 
@@ -250,6 +305,7 @@ defmodule ClawCode.Providers.OpenAICompatible do
         %{
           auth_mode: "optional",
           tool_support: "compatible",
+          input_modalities: Multimodal.input_modalities(),
           payload_modes: ["standard", "minimal"],
           fallback_modes: ["retry_minimal_payload"],
           aliases: provider_aliases("generic")
@@ -259,6 +315,7 @@ defmodule ClawCode.Providers.OpenAICompatible do
         %{
           auth_mode: "required",
           tool_support: "full",
+          input_modalities: Multimodal.input_modalities(),
           payload_modes: ["standard"],
           fallback_modes: [],
           aliases: provider_aliases(provider)
@@ -268,10 +325,20 @@ defmodule ClawCode.Providers.OpenAICompatible do
         %{
           auth_mode: "required",
           tool_support: "full",
+          input_modalities: Multimodal.input_modalities(),
           payload_modes: ["standard"],
           fallback_modes: [],
           aliases: []
         }
+    end
+  end
+
+  defp probe_request_modalities(prompt, image_inputs) do
+    prompt
+    |> Multimodal.build_user_content(image_inputs)
+    |> case do
+      {:ok, content} -> Multimodal.content_modalities(content)
+      {:error, _reason} -> if(image_inputs == [], do: ["text"], else: ["text", "image"])
     end
   end
 
@@ -393,18 +460,7 @@ defmodule ClawCode.Providers.OpenAICompatible do
 
   def assistant_message(_response), do: :error
 
-  def message_content(%{"content" => nil}), do: ""
-  def message_content(%{"content" => content}) when is_binary(content), do: content
-  def message_content(%{"content" => %{"text" => text}}) when is_binary(text), do: text
-
-  def message_content(%{"content" => content}) when is_list(content) do
-    Enum.map_join(content, "\n", fn
-      %{"type" => "text", "text" => text} -> text
-      %{"text" => text} -> text
-      other -> Jason.encode!(other)
-    end)
-  end
-
+  def message_content(%{"content" => content}), do: Multimodal.summary(content)
   def message_content(%{"text" => text}) when is_binary(text), do: text
   def message_content(_message), do: ""
 
@@ -414,6 +470,36 @@ defmodule ClawCode.Providers.OpenAICompatible do
     |> String.downcase()
     |> then(&Map.get(@provider_aliases, &1, &1))
   end
+
+  defp vision_requested?(opts) do
+    Enum.any?(
+      [
+        opts[:vision_provider],
+        opts[:vision_base_url],
+        opts[:vision_api_key],
+        opts[:vision_api_key_header],
+        opts[:vision_model],
+        env("CLAW_VISION_PROVIDER"),
+        env("CLAW_VISION_BASE_URL"),
+        env("CLAW_VISION_API_KEY"),
+        env("CLAW_VISION_API_KEY_HEADER"),
+        env("CLAW_VISION_MODEL")
+      ],
+      &present?/1
+    )
+  end
+
+  defp vision_opt(opts, key, env_name) do
+    value = opts[key] || env(env_name)
+    if present?(value), do: value, else: nil
+  end
+
+  defp shared_primary_value(%__MODULE__{} = primary_config, provider, field)
+       when primary_config.provider == provider do
+    Map.get(primary_config, field)
+  end
+
+  defp shared_primary_value(_primary_config, _provider, _field), do: nil
 
   defp field_diagnostic(value, candidates, default_value) do
     env_source = Enum.find(candidates, &present?(env(&1)))
