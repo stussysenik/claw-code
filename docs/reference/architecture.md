@@ -89,6 +89,14 @@ The Zig boundary should stay:
 
 Do not move session logic, tool execution, provider behavior, or daemon behavior into Zig. That would make the system faster in the wrong place and less reliable where it matters.
 
+Use this rule when deciding whether a new optimization belongs in Elixir or Zig:
+
+- keep it in Elixir if it changes session state, retries, cancellation, tool policy, provider semantics, receipts, or operator-visible behavior
+- keep it in Elixir if the first requirement is correctness, inspectability, or recovery rather than raw throughput
+- consider Zig only after the Elixir path exists or the hotspot is benchmarked, and only when the boundary can stay as pure input and output with no hidden state
+- reject the Zig move if disabling it would change correctness instead of only speed
+- reject the Zig move if the fallback cannot be tested in the same release lane as the accelerated path
+
 ## Provider Boundary
 
 Providers should keep one OpenAI-compatible shape even when the upstream is GLM, Kimi, NIM, or a custom endpoint.

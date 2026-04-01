@@ -8,9 +8,11 @@ note "running native Ralph loop"
 
 native_cycle() {
   run mix claw_code.native.build
-  run mix test test/claw_code/native_ranker_test.exs test/claw_code/router_test.exs
+  run mix test test/claw_code/native_ranker_test.exs test/claw_code/router_test.exs test/claw_code/qa_script_test.exs
   run ./claw_code route --native "review MCP tool"
+  run ./claw_code route --no-native "review MCP tool"
   run ./claw_code symphony --native "review MCP tool"
+  run ./claw_code symphony --no-native "review MCP tool"
 }
 
 run_cycles "native gate" native_cycle

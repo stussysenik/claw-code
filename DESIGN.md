@@ -175,6 +175,8 @@ Rules:
 - native behavior must be easy to disable
 - failure must fall back clearly
 - session logic, provider control flow, and operator semantics must not move into Zig
+- only benchmarked, pure compute hotspots with a deterministic BEAM fallback belong at the Zig edge
+- if disabling the native path changes correctness, continuity, or inspectability, the feature is in the wrong place
 
 ## TUI And Thin Clients
 
@@ -202,7 +204,7 @@ If a design claim cannot be demonstrated through those surfaces, it is still onl
 When deciding where a new feature belongs:
 
 - if it changes session continuity, cancellation, replay, routing, or operator semantics, put it in Elixir first
-- if it is a pure compute optimization with a clear fallback, it may live behind the Zig boundary
+- if it is a pure compute optimization with a benchmarked hotspot and a clear fallback, it may live behind the Zig boundary
 - if it needs another runtime, keep it as an adapter process rather than a core dependency
 - if it expands the operator surface, document it in the README and the relevant reference docs
 

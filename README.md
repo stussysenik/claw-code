@@ -124,6 +124,7 @@ mix escript.build
 ./claw_code doctor
 ./claw_code probe
 ./claw_code symphony --native "review MCP tool"
+./claw_code symphony --no-native "review MCP tool"
 ./claw_code chat --allow-shell --allow-write "inspect the repo and propose a minimal plan"
 ```
 

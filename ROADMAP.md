@@ -27,7 +27,6 @@ What is already strong:
 What still blocks daily-driver use:
 
 - Phase 2 still needs the remaining live smoke evidence for Kimi and one generic OpenAI-compatible endpoint. GLM and NIM are already proven, the current live vision-capable GLM path in this repo is `GLM-4.6V`, and the split path `GLM-5.1` reasoning plus `GLM-4.6V` vision has now also been proven through `chat` and the TUI.
-- Phase 3 still needs native disable or fallback evidence plus the Elixir-first versus Zig extension rule written down explicitly. The adapter timeout, exit-status, and output proof is now in place, and Common Lisp now has one structured tool path beyond raw eval.
 - Phase 6 still needs a real daily-driver beta checklist, live smoke matrix, and release decision record.
 
 That means the right claim today is: promising daily-driver candidate, not main-tool ready.
@@ -156,8 +155,7 @@ These are valuable, but they should not delay the daily-driver bar.
 
 1. Capture live provider evidence for GLM, Kimi, NIM, and one generic endpoint.
 2. Prove the split-backbone path against a real preferred provider combination, then close the remaining Kimi and generic evidence gaps.
-3. Finish the remaining Phase 3 native fallback and Elixir-versus-Zig boundary work.
-4. Write the Phase 6 beta checklist and smoke matrix.
+3. Write the Phase 6 beta checklist and smoke matrix.
 
 ### P1: Daily-Driver Beta
 

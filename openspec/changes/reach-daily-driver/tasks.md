@@ -42,8 +42,8 @@
 - [x] Finish the shell/write safety story with clear receipts, policy display, and destructive-command evidence.
 - [x] Add stronger timeout, exit-status, and output proof for Python, Lua, and Common Lisp adapters.
 - [x] Add one nontrivial Common Lisp-backed tool or evaluation path that proves the adapter is worth keeping.
-- [ ] Add native-ranker build and fallback evidence for the release checklist with native explicitly disabled.
-- [ ] Document when a new optimization belongs in Elixir first versus Zig.
+- [x] Add native-ranker build and fallback evidence for the release checklist with native explicitly disabled.
+- [x] Document when a new optimization belongs in Elixir first versus Zig.
 
 ## Phase 4: TUI Daily-Driver UX
 
