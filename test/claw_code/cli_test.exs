@@ -14,6 +14,8 @@ defmodule ClawCode.CLITest do
 
     assert output =~ "# Doctor"
     assert output =~ "- configured:"
+    assert output =~ "- auth_mode:"
+    assert output =~ "- tool_support:"
     assert output =~ "- request_url:"
     assert output =~ "- missing:"
   end
@@ -95,6 +97,7 @@ defmodule ClawCode.CLITest do
 
     assert output =~ "# Probe"
     assert output =~ "- status: ok"
+    assert output =~ "- request_mode: standard"
     assert output =~ "- response: probe-ok"
   end
 

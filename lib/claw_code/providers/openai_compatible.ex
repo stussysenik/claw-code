@@ -52,6 +52,7 @@ defmodule ClawCode.Providers.OpenAICompatible do
     config = resolve_config(opts)
     required = required_env_vars(config.provider)
     required_fields = required_fields(config.provider)
+    profile = provider_profile(config.provider)
 
     field_diagnostics = %{
       base_url:
@@ -70,6 +71,7 @@ defmodule ClawCode.Providers.OpenAICompatible do
       provider: config.provider,
       configured: configured?(config),
       request_url: if(present?(config.base_url), do: request_url(config.base_url), else: nil),
+      profile: profile,
       fields: field_diagnostics,
       missing_fields:
         field_diagnostics
@@ -81,17 +83,24 @@ defmodule ClawCode.Providers.OpenAICompatible do
 
   def chat(%__MODULE__{} = config, messages, opts \\ []) do
     tools = Keyword.get(opts, :tools, [])
+    payload = chat_payload(config, messages, tools, :standard)
 
-    payload =
-      %{
-        "model" => config.model,
-        "messages" => messages,
-        "temperature" => 0.2
-      }
-      |> maybe_put("tools", tools, tools != [])
-      |> maybe_put("tool_choice", "auto", tools != [])
+    case request(config, payload) do
+      {:ok, response} ->
+        {:ok, Map.put(response, "_claw_request_mode", "standard")}
 
-    request(config, payload)
+      {:error, reason} ->
+        if retry_minimal_payload?(config, reason) do
+          config
+          |> request(chat_payload(config, messages, [], :minimal))
+          |> case do
+            {:ok, response} -> {:ok, Map.put(response, "_claw_request_mode", "minimal")}
+            {:error, minimal_reason} -> {:error, minimal_reason}
+          end
+        else
+          {:error, reason}
+        end
+    end
   end
 
   def probe(opts \\ []) do
@@ -112,6 +121,11 @@ defmodule ClawCode.Providers.OpenAICompatible do
       request_url: diagnostics.request_url,
       api_key_header: config.api_key_header,
       model: config.model,
+      auth_mode: diagnostics.profile.auth_mode,
+      tool_support: diagnostics.profile.tool_support,
+      payload_modes: diagnostics.profile.payload_modes,
+      fallback_modes: diagnostics.profile.fallback_modes,
+      provider_aliases: diagnostics.profile.aliases,
       missing: diagnostics.missing_fields
     }
 
@@ -128,6 +142,7 @@ defmodule ClawCode.Providers.OpenAICompatible do
                Map.merge(payload, %{
                  status: "ok",
                  latency_ms: latency_ms,
+                 request_mode: request_mode(response),
                  response_preview: message_content(message)
                })}
 
@@ -174,7 +189,7 @@ defmodule ClawCode.Providers.OpenAICompatible do
            body_format: :binary
          ) do
       {:ok, {{_, status, _}, _headers, response_body}} when status in 200..299 ->
-        {:ok, Jason.decode!(response_body)}
+        decode_response(response_body)
 
       {:ok, {{_, status, _}, _headers, response_body}} ->
         {:error, "provider request failed with status #{status}: #{String.trim(response_body)}"}
@@ -226,6 +241,39 @@ defmodule ClawCode.Providers.OpenAICompatible do
 
   def required_fields("generic"), do: [:base_url, :model]
   def required_fields(_provider), do: [:base_url, :api_key, :model]
+
+  def provider_profile(provider) when is_binary(provider) do
+    normalized = normalize_provider(provider)
+
+    case normalized do
+      "generic" ->
+        %{
+          auth_mode: "optional",
+          tool_support: "compatible",
+          payload_modes: ["standard", "minimal"],
+          fallback_modes: ["retry_minimal_payload"],
+          aliases: provider_aliases("generic")
+        }
+
+      provider when provider in @providers ->
+        %{
+          auth_mode: "required",
+          tool_support: "full",
+          payload_modes: ["standard"],
+          fallback_modes: [],
+          aliases: provider_aliases(provider)
+        }
+
+      _other ->
+        %{
+          auth_mode: "required",
+          tool_support: "full",
+          payload_modes: ["standard"],
+          fallback_modes: [],
+          aliases: []
+        }
+    end
+  end
 
   def default_base_url("glm"), do: "https://open.bigmodel.cn/api/coding/paas/v4"
   def default_base_url("nim"), do: "https://integrate.api.nvidia.com/v1"
@@ -318,12 +366,13 @@ defmodule ClawCode.Providers.OpenAICompatible do
   def tooling_unsupported?(reason) when is_binary(reason) do
     normalized = String.downcase(reason)
 
-    String.contains?(normalized, "tool_choice") or
-      (String.contains?(normalized, "tools") and String.contains?(normalized, "unsupported")) or
-      (String.contains?(normalized, "function") and String.contains?(normalized, "unsupported"))
+    compatibility_error_for?(normalized, ["tool_choice", "tools", "function", "function_call"])
   end
 
   def tooling_unsupported?(_reason), do: false
+
+  def request_mode(%{"_claw_request_mode" => mode}) when is_binary(mode), do: mode
+  def request_mode(_response), do: "standard"
 
   def assistant_message(%{"choices" => [%{"message" => message} | _rest]}) when is_map(message),
     do: {:ok, message}
@@ -386,6 +435,67 @@ defmodule ClawCode.Providers.OpenAICompatible do
   end
 
   defp present?(value), do: is_binary(value) and value != ""
+
+  defp chat_payload(config, messages, tools, :standard) do
+    %{
+      "model" => config.model,
+      "messages" => messages,
+      "temperature" => 0.2
+    }
+    |> maybe_put("tools", tools, tools != [])
+    |> maybe_put("tool_choice", "auto", tools != [])
+  end
+
+  defp chat_payload(config, messages, _tools, :minimal) do
+    %{
+      "model" => config.model,
+      "messages" => messages
+    }
+  end
+
+  defp retry_minimal_payload?(%__MODULE__{provider: "generic"}, reason) when is_binary(reason) do
+    normalized = String.downcase(reason)
+
+    compatibility_error_for?(normalized, [
+      "temperature",
+      "tool_choice",
+      "tools",
+      "function",
+      "function_call"
+    ])
+  end
+
+  defp retry_minimal_payload?(_config, _reason), do: false
+
+  defp compatibility_error_for?(normalized_reason, fields) do
+    invalid_reason? =
+      String.contains?(normalized_reason, "unsupported") or
+        String.contains?(normalized_reason, "unknown parameter") or
+        String.contains?(normalized_reason, "unknown field") or
+        String.contains?(normalized_reason, "extra inputs") or
+        String.contains?(normalized_reason, "extra fields") or
+        String.contains?(normalized_reason, "additional properties") or
+        String.contains?(normalized_reason, "not allowed") or
+        String.contains?(normalized_reason, "not supported")
+
+    invalid_reason? and Enum.any?(fields, &String.contains?(normalized_reason, &1))
+  end
+
+  defp provider_aliases(provider) do
+    [
+      provider
+      | Enum.flat_map(@provider_aliases, fn {alias_name, canonical} ->
+          if canonical == provider, do: [alias_name], else: []
+        end)
+    ]
+  end
+
+  defp decode_response(response_body) do
+    case Jason.decode(response_body) do
+      {:ok, decoded} -> {:ok, decoded}
+      {:error, reason} -> {:error, "provider returned invalid json: #{Exception.message(reason)}"}
+    end
+  end
 
   defp timeout_env(name, default) do
     case env(name) do

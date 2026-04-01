@@ -746,6 +746,42 @@ defmodule ClawCode.RuntimeTest do
     refute second_request =~ "\"tool_choice\""
   end
 
+  test "chat retries with a minimal payload when a generic backend rejects temperature" do
+    responses = [
+      {:raw, http_response(400, ~s({"error":{"message":"unsupported parameter: temperature"}}))},
+      Jason.encode!(%{
+        "choices" => [%{"message" => %{"role" => "assistant", "content" => "minimal fallback"}}]
+      })
+    ]
+
+    {base_url, listener, server} = start_stub_server(responses, capture_requests: true)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+    end)
+
+    result =
+      Runtime.chat("hello from a strict local backend",
+        provider: "generic",
+        base_url: base_url,
+        api_key: nil,
+        model: "local-model",
+        native: false
+      )
+
+    assert result.stop_reason == "completed"
+    assert result.output == "minimal fallback"
+
+    assert_receive {:request, first_request}, 1_000
+    assert first_request =~ "\"temperature\""
+
+    assert_receive {:request, second_request}, 1_000
+    refute second_request =~ "\"temperature\""
+    refute second_request =~ "\"tools\""
+    refute second_request =~ "\"tool_choice\""
+  end
+
   defp start_stub_server(responses, opts \\ []) do
     {:ok, listener} =
       :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true])

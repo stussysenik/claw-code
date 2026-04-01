@@ -16,6 +16,7 @@
 - `claw_code` only needs one OpenAI-compatible contract: base URL, API key, and model.
 - Tool exposure defaults to `auto`: repo-oriented prompts expose tools, plain chat prompts do not. Use `--tools` to force tool specs on, `--no-tools` to force chat-only mode, or `CLAW_TOOL_MODE=auto|on|off` for env-driven defaults.
 - `./claw_code doctor` reports the active provider request URL, whether the provider is fully configured, and whether each field is coming from an env var, a default, or is still missing.
+- `./claw_code doctor` also reports provider portability hints at a glance: `auth_mode`, `tool_support`, `payload_modes`, `fallback_modes`, and supported aliases.
 - `./scripts/qa.sh provider` is env-driven; use direct `./claw_code doctor` or `./claw_code chat` commands when you want to pass explicit CLI flags.
 
 ## Copy-Paste CLI Checks
@@ -64,7 +65,7 @@ Custom OpenAI-compatible endpoint:
 - If the endpoint does not require auth, omit `CLAW_API_KEY` entirely. `claw_code` will skip the `Authorization` header for `generic` when no API key is present.
 - If the endpoint expects a different auth header, pass `--api-key-header api-key` or export `CLAW_API_KEY_HEADER=api-key`.
 - `./claw_code probe` is the recommended first check before a longer session or TUI run.
-- When tool policy is still `auto`, `chat` will retry once without `tools` / `tool_choice` if a generic endpoint rejects those parameters as unsupported.
+- When a generic endpoint rejects extra OpenAI-style request fields, `claw_code` now retries once with a minimal payload containing only `model` and `messages`. `probe` exposes the final `request_mode` so the operator can see whether the endpoint accepted the standard or minimal shape.
 - Smoke:
 
 ```bash

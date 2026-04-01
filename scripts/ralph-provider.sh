@@ -9,32 +9,29 @@ PROVIDER="${CLAW_PROVIDER:-generic}"
 
 note "running provider Ralph loop for provider=$PROVIDER"
 
-provider_env_present() {
-  case "$PROVIDER" in
-    glm)
-      require_env_any "glm" GLM_API_KEY BIGMODEL_API_KEY CLAW_API_KEY
-      ;;
-    nim)
-      require_env_any "nim" NIM_API_KEY NVIDIA_API_KEY CLAW_API_KEY
-      ;;
-    kimi)
-      require_env_any "kimi" KIMI_API_KEY MOONSHOT_API_KEY CLAW_API_KEY
-      ;;
-    *)
-      require_env_any "generic provider" CLAW_API_KEY GLM_API_KEY BIGMODEL_API_KEY NIM_API_KEY NVIDIA_API_KEY KIMI_API_KEY MOONSHOT_API_KEY
-      ;;
-  esac
-}
-
 provider_cycle() {
   run mix escript.build
-  run ./claw_code doctor
+  run ./claw_code doctor --provider "$PROVIDER"
 
-  if provider_env_present; then
-    note "provider credentials present; running live provider smoke"
+  local probe_output
+  local probe_status
+
+  set +e
+  probe_output="$(cd "$ROOT" && ./claw_code probe --provider "$PROVIDER" 2>&1)"
+  probe_status=$?
+  set -e
+
+  printf '%s\n' "$probe_output" | tee -a "$LOG_FILE"
+
+  if [[ "$probe_status" -eq 0 ]]; then
+    note "probe succeeded; running live provider smoke"
     run ./claw_code chat --provider "$PROVIDER" "$PROMPT"
-  else
-    note "provider credentials not present; validating missing-provider path instead"
+    return 0
+  fi
+
+  if grep -q -- "- status: missing_config" <<<"$probe_output"; then
+    note "probe reported missing config; validating missing-provider path instead"
+
     local output
     local status
 
@@ -54,7 +51,12 @@ provider_cycle() {
       note "expected missing-provider validation to report missing_provider_config"
       return 1
     fi
+
+    return 0
   fi
+
+  note "probe failed unexpectedly"
+  return 1
 }
 
 run_cycles "provider gate" provider_cycle

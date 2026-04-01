@@ -28,8 +28,8 @@
 ## Phase 2: Provider Portability
 
 - [ ] Record live smoke evidence for GLM, Kimi, NIM, and one generic OpenAI-compatible endpoint.
-- [ ] Add provider capability summaries so the operator can see tool support, auth mode, and endpoint identity at a glance.
-- [ ] Harden compatibility fallback for partial OpenAI-compatible backends beyond the current `tools` retry.
+- [x] Add provider capability summaries so the operator can see tool support, auth mode, and endpoint identity at a glance.
+- [x] Harden compatibility fallback for partial OpenAI-compatible backends beyond the current `tools` retry.
 - [ ] Add one provider-matrix Ralph loop mode or checklist that can be run before calling a release candidate "daily-driver".
 - [ ] Document the preferred local setup patterns for `.env.local` without persisting secrets.
 

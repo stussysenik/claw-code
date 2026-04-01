@@ -136,7 +136,29 @@ defmodule ClawCode.ProviderTest do
         assert diagnostics.fields.base_url.source == "default"
         assert diagnostics.fields.model.source == "default"
         assert diagnostics.fields.api_key.source == "missing"
+        assert diagnostics.profile.auth_mode == "required"
+        assert diagnostics.profile.tool_support == "full"
         assert :api_key in diagnostics.missing_fields
+      end
+    )
+  end
+
+  test "generic provider profile exposes compatible fallback capabilities" do
+    with_env(
+      %{
+        "CLAW_BASE_URL" => "http://127.0.0.1:4000/v1",
+        "CLAW_API_KEY" => nil,
+        "CLAW_MODEL" => "local-model"
+      },
+      fn ->
+        diagnostics = OpenAICompatible.diagnostics(provider: "generic")
+
+        assert diagnostics.profile.auth_mode == "optional"
+        assert diagnostics.profile.tool_support == "compatible"
+        assert diagnostics.profile.payload_modes == ["standard", "minimal"]
+        assert diagnostics.profile.fallback_modes == ["retry_minimal_payload"]
+        assert "local" in diagnostics.profile.aliases
+        assert "custom" in diagnostics.profile.aliases
       end
     )
   end
@@ -165,6 +187,43 @@ defmodule ClawCode.ProviderTest do
     )
   end
 
+  test "probe retries with a minimal payload for a generic compatibility backend" do
+    with_env(
+      %{
+        "CLAW_BASE_URL" => nil,
+        "CLAW_API_KEY" => nil,
+        "CLAW_MODEL" => nil
+      },
+      fn ->
+        responses = [
+          {:raw,
+           http_response(400, ~s({"error":{"message":"unsupported parameter: temperature"}}))},
+          Jason.encode!(%{
+            "choices" => [%{"message" => %{"role" => "assistant", "content" => "probe-minimal"}}]
+          })
+        ]
+
+        {base_url, listener, server} = start_stub_server(responses)
+
+        on_exit(fn ->
+          send(server, :stop)
+          :gen_tcp.close(listener)
+        end)
+
+        assert {:ok, payload} =
+                 OpenAICompatible.probe(
+                   provider: "generic",
+                   base_url: base_url,
+                   model: "local-model"
+                 )
+
+        assert payload.status == "ok"
+        assert payload.request_mode == "minimal"
+        assert payload.response_preview == "probe-minimal"
+      end
+    )
+  end
+
   defp with_env(overrides, fun) do
     previous =
       Enum.into(overrides, %{}, fn {key, _value} -> {key, System.get_env(key)} end)
@@ -182,5 +241,83 @@ defmodule ClawCode.ProviderTest do
     end)
 
     fun.()
+  end
+
+  defp start_stub_server(responses) do
+    {:ok, listener} =
+      :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true])
+
+    {:ok, port} = :inet.port(listener)
+
+    server =
+      spawn_link(fn ->
+        serve_responses(listener, responses)
+      end)
+
+    {"http://127.0.0.1:#{port}/v1", listener, server}
+  end
+
+  defp serve_responses(listener, responses) do
+    Enum.each(responses, fn response ->
+      {body, raw_response?} =
+        case response do
+          {:raw, body} -> {body, true}
+          body -> {body, false}
+        end
+
+      {:ok, socket} = :gen_tcp.accept(listener)
+      {:ok, _request} = read_request(socket, "")
+      :ok = :gen_tcp.send(socket, if(raw_response?, do: body, else: http_response(200, body)))
+      :gen_tcp.close(socket)
+    end)
+
+    receive do
+      :stop -> :ok
+    after
+      100 -> :ok
+    end
+  end
+
+  defp read_request(socket, acc) do
+    case :gen_tcp.recv(socket, 0, 1_000) do
+      {:ok, chunk} ->
+        buffer = acc <> chunk
+
+        case String.split(buffer, "\r\n\r\n", parts: 2) do
+          [headers, body] ->
+            content_length =
+              headers
+              |> String.split("\r\n")
+              |> Enum.find_value(0, fn line ->
+                case String.split(line, ":", parts: 2) do
+                  ["Content-Length", value] -> String.trim(value) |> String.to_integer()
+                  _other -> nil
+                end
+              end)
+
+            if byte_size(body) >= content_length do
+              {:ok, buffer}
+            else
+              read_request(socket, buffer)
+            end
+
+          [_partial] ->
+            read_request(socket, buffer)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp http_response(status, body) do
+    [
+      "HTTP/1.1 #{status} OK\r\n",
+      "content-type: application/json\r\n",
+      "content-length: #{byte_size(body)}\r\n",
+      "connection: close\r\n\r\n",
+      body
+    ]
+    |> IO.iodata_to_binary()
   end
 end

@@ -57,6 +57,11 @@ defmodule ClawCode.Manifest do
       "- provider: #{payload.provider}",
       "- configured: #{payload.configured}",
       "- tool_policy: #{payload.tool_policy}",
+      "- auth_mode: #{payload.auth_mode}",
+      "- tool_support: #{payload.tool_support}",
+      "- payload_modes: #{Enum.join(payload.payload_modes, ", ")}",
+      "- fallback_modes: #{render_modes(payload.fallback_modes)}",
+      "- provider_aliases: #{Enum.join(payload.provider_aliases, ", ")}",
       "- request_url: #{payload.request_url || "missing"}",
       "- base_url: #{payload.base_url.value || "missing"} (#{payload.base_url.source})",
       "- api_key: #{payload.api_key.masked} (#{payload.api_key.source})",
@@ -84,6 +89,11 @@ defmodule ClawCode.Manifest do
       provider: config.provider,
       configured: diagnostics.configured,
       tool_policy: Runtime.tool_policy(opts),
+      auth_mode: diagnostics.profile.auth_mode,
+      tool_support: diagnostics.profile.tool_support,
+      payload_modes: diagnostics.profile.payload_modes,
+      fallback_modes: diagnostics.profile.fallback_modes,
+      provider_aliases: diagnostics.profile.aliases,
       request_url: diagnostics.request_url,
       base_url: %{
         value: config.base_url,
@@ -118,6 +128,8 @@ defmodule ClawCode.Manifest do
 
   defp render_missing_fields([]), do: "none"
   defp render_missing_fields(fields), do: Enum.map_join(fields, ", ", &to_string/1)
+  defp render_modes([]), do: "none"
+  defp render_modes(values), do: Enum.join(values, ", ")
 
   defp mask(nil), do: "missing"
   defp mask(value) when byte_size(value) <= 6, do: String.duplicate("*", byte_size(value))
