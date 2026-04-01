@@ -89,6 +89,7 @@ This file stays intentionally coarse. The detailed daily-driver plan and remaini
 - Persist daemon metadata and session ownership state under `.claw/` so client invocations can reconnect, inspect, and cancel work across processes.
 - Introduce a clear client/server split: the CLI can act as a direct runtime client or as a daemon client, but the daemon remains a separate operator surface.
 - Add resilient startup, stale-daemon detection, and crash recovery so a dead control plane fails closed instead of silently losing session state.
+- Keep the common break or fix flows packaged as operator playbooks and one repeatable recovery Ralph loop instead of tribal knowledge.
 - Make future multi-client control an extension of the same daemon contract, not a separate subsystem.
 - Initial slice status: local daemon lifecycle plus daemon-backed `chat` and `cancel-session` are implemented behind tests; next work is hardening the background path and widening replay/inspection semantics.
 

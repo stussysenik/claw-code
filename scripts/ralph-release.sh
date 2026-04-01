@@ -17,6 +17,7 @@ release_cycle() {
   run ./scripts/qa.sh adapters
   run ./scripts/qa.sh provider
   run ./scripts/qa.sh daemon
+  run ./scripts/qa.sh recovery
   run npm ci --ignore-scripts
 
   if release_env_present; then

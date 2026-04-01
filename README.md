@@ -54,6 +54,7 @@ The preserved operator workflows from the archived workspace are documented in [
 - [.omx/team.md](./.omx/team.md)
 - [docs/backlog.md](./docs/backlog.md)
 - [docs/reference/architecture.md](./docs/reference/architecture.md)
+- [docs/reference/recovery.md](./docs/reference/recovery.md)
 - [docs/execution-plan.md](./docs/execution-plan.md)
 - [docs/engineering-standards.md](./docs/engineering-standards.md)
 - [docs/providers.md](./docs/providers.md)
@@ -67,6 +68,7 @@ The preserved operator workflows from the archived workspace are documented in [
 - [scripts/ralph-provider.sh](./scripts/ralph-provider.sh)
 - [scripts/ralph-provider-matrix.sh](./scripts/ralph-provider-matrix.sh)
 - [scripts/ralph-daemon.sh](./scripts/ralph-daemon.sh)
+- [scripts/ralph-recovery.sh](./scripts/ralph-recovery.sh)
 - [scripts/ralph-release.sh](./scripts/ralph-release.sh)
 - [package.json](./package.json)
 - [.releaserc.json](./.releaserc.json)
@@ -106,6 +108,7 @@ Canonical QA dispatcher:
 ./scripts/qa.sh provider "say hello and report the configured provider"
 ./scripts/qa.sh provider-matrix
 ./scripts/qa.sh daemon
+./scripts/qa.sh recovery
 ./scripts/qa.sh release
 ```
 
@@ -173,6 +176,8 @@ Daemon startup now also reconciles any abandoned persisted `run=running` session
 
 `./claw_code daemon status` now also derives a compact session-health view from the daemon's session root: busy/failed/partially recovered signals, aggregate running/failed/recovered counts, plus `latest_running`, `latest_failed`, and `latest_recovered` summaries with recent receipt detail for the newest failed run. That keeps break/fix triage on one command instead of forcing immediate `load-session` hops.
 
+The concrete break or fix paths now live in [docs/reference/recovery.md](./docs/reference/recovery.md), and `./scripts/qa.sh recovery` is the canonical smoke lane for stale-daemon replacement, abandoned-run reconciliation, corrupted-session handling, and daemon root mismatch rejection.
+
 The final UX can absolutely include a full terminal UI, and the correct layering stays engine first: the Elixir runtime and daemon remain the product core, and the TUI is a client over that control plane instead of the architectural center.
 
 `./claw_code tui` is the first in-repo slice of that client. It is intentionally minimal: recent sessions, selected transcript, prompt/output summaries, provider/model diagnostics, tool receipts, aggregate run counts, selected-session run metadata, optional `watch` refresh cadence, `follow` targets like `running`, `latest-running`, or `latest-failed`, an `active` alias plus `focus active` preset for monitoring live work, explicit `inspect active` / `inspect failed` shortcuts over the same alias resolver used by `open`, targeted `cancel active` / `cancel running` intervention, in-client provider/model/base-url switching with reset-to-default, session filtering and limits, root-wide substring `find`, explicit `older` / `newer` paging through larger session roots, transcript `find-msg` with `next-hit` / `prev-hit`, alias-driven `open latest-completed` / `open latest-failed`, targeted `resume selected ...` / `resume active ...` / `resume latest-failed ...`, repeated `--image PATH` support on in-client `chat` and `resume`, bounded session-window rendering around the current selection, transcript tail windows with absolute message numbering, provider `probe`, and a command loop for `chat`, `resume`, `inspect`, `open`, `next`, `prev`, `older`, `newer`, `cancel`, and `tools`.
@@ -226,6 +231,7 @@ The release lane generates tags, updates `CHANGELOG.md`, and publishes GitHub Re
 - `native/` contains the isolated Zig helper boundary.
 - `docs/` contains backlog and execution-plan material.
 - `docs/providers.md` records the provider env contract for `generic`, `glm`, `kimi`, and `nim`.
+- `docs/reference/recovery.md` records the common break or fix playbooks for daemon and session recovery.
 - `docs/reference/tui.md` records the client boundary for a future terminal UI.
 - `.omx/` contains the operator board, team split, checklists, and mission briefs.
 - `scripts/` contains the canonical Ralph loops, QA dispatcher, and validation gate.

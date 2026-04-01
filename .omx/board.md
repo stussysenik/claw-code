@@ -23,6 +23,7 @@
 - Do not expand shell or write capability without tests and receipts.
 - Treat the requirements ledger as a blocking reliability feature, not optional polish.
 - Use `scripts/qa.sh` as the canonical dispatcher for validation and lane-specific gates.
+- Use `scripts/qa.sh recovery` when you need one break/fix proof lane for stale daemons, abandoned runs, invalid sessions, and daemon-root mismatch.
 
 ## Role Map
 

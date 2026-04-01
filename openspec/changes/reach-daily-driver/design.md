@@ -167,11 +167,13 @@ Required outputs:
 - daemon health and recovery surface for stale state, busy sessions, provider failures, and partial writes
 - better inspection of currently running and recently failed work
 - evidence that repeated background session use does not silently corrupt session continuity
+- one canonical recovery playbook doc plus a repeatable recovery Ralph loop
 
 Suggested Ralph loops:
 
 - `scripts/ralph-daemon.sh`
 - `scripts/ralph-provider.sh`
+- `scripts/ralph-recovery.sh`
 
 Exit criteria:
 

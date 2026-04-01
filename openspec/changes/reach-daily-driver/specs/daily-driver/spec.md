@@ -41,6 +41,13 @@
 - **THEN** the daemon rewrites that session to an explicit recovered state before reporting health
 - **AND** `daemon status` reports it as `run_interrupted` instead of live running work
 
+#### Scenario: Common local recovery flows are documented and repeatable
+
+- **GIVEN** the operator hits stale daemon metadata, an abandoned running session, a corrupted session file, or a daemon session-root mismatch
+- **WHEN** they follow the documented recovery playbook or run the canonical recovery smoke loop
+- **THEN** the inspect and fix commands are explicit
+- **AND** the resulting behavior matches the persisted daemon or session contracts instead of relying on ad hoc shell surgery
+
 ### Requirement: Portable Provider Boundary
 
 `claw_code` MUST support daily use across GLM, Kimi, NVIDIA NIM, and generic OpenAI-compatible endpoints without code changes.

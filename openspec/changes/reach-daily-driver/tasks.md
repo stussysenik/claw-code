@@ -59,7 +59,7 @@
 - [x] Add clearer daemon health reporting for busy, failed, stale, and partially recovered states.
 - [x] Prove that repeated background session use does not silently lose session continuity.
 - [x] Add better inspection for the most recent receipt, provider error, and stop reason of active or failed runs.
-- [ ] Add recovery docs and smoke commands for the common break/fix paths.
+- [x] Add recovery docs and smoke commands for the common break/fix paths.
 
 ## Phase 6: Release Confidence
 
