@@ -6,6 +6,7 @@
 - [Local Env Pattern](#local-env-pattern)
 - [Split Reasoning And Vision Backbone](#split-reasoning-and-vision-backbone)
 - [Provider Matrix Workflow](#provider-matrix-workflow)
+- [Live Provider Evidence](#live-provider-evidence)
 - [Generic Or Custom OpenAI-Compatible](#generic-or-custom-openai-compatible)
 - [GLM Coding Plan](#glm-coding-plan)
 - [Kimi K2.5](#kimi-k25)
@@ -26,6 +27,7 @@
 - `./claw_code probe` accepts repeated `--image PATH` flags and reports `request_modalities`, which is the fastest local preflight for a vision-capable model or endpoint.
 - `./scripts/qa.sh provider` is env-driven; use direct `./claw_code doctor` or `./claw_code chat` commands when you want to pass explicit CLI flags.
 - `./scripts/qa.sh provider-matrix` is the pre-RC matrix loop: it walks `generic`, `glm`, `kimi`, and `nim`, validates either the live path or the explicit missing-config path, and records the evidence under `.omx/logs/provider-matrix/`.
+- `./scripts/qa.sh provider-live` is the strict live-success loop: every selected provider must pass `doctor -> probe -> chat`, and missing config is treated as a real failure instead of an accepted path.
 
 ## Local Env Pattern
 
@@ -98,6 +100,39 @@ Then run the QA lane:
 
 If a provider is configured, the matrix lane will run `doctor -> probe -> chat`. If a provider is not configured, it validates the explicit missing-config path instead of treating that as an opaque failure.
 
+## Live Provider Evidence
+
+Use the live lane when you want current proof instead of a mixed live-or-missing-config matrix:
+
+```bash
+./scripts/qa.sh provider-live
+```
+
+By default it checks `glm`, `nim`, and `generic`.
+
+Select a narrower set:
+
+```bash
+CLAW_PROVIDER_LIVE=glm,generic \
+./scripts/qa.sh provider-live
+```
+
+The generic leg needs explicit generic endpoint details in shell env through `CLAW_GENERIC_LIVE_*` or the generic `CLAW_*` fallbacks:
+
+```bash
+set -a
+source .env.local
+set +a
+
+CLAW_PROVIDER_LIVE=generic \
+CLAW_GENERIC_LIVE_BASE_URL="https://open.bigmodel.cn/api/coding/paas/v4" \
+CLAW_GENERIC_LIVE_API_KEY="$GLM_API_KEY" \
+CLAW_GENERIC_LIVE_MODEL="GLM-4.7" \
+./scripts/qa.sh provider-live
+```
+
+That is the recommended path when you want to prove one real generic OpenAI-compatible endpoint without changing your default provider block.
+
 ## Copy-Paste CLI Checks
 
 Kimi:
@@ -166,6 +201,7 @@ Split reasoning plus vision backbone:
 - `./claw_code probe` is the recommended first check before a longer session or TUI run.
 - `probe` reports `request_modalities`, so a multimodal preflight is explicit instead of inferred from the command line.
 - When a generic endpoint rejects extra OpenAI-style request fields, `claw_code` now retries once with a minimal payload containing only `model` and `messages`. `probe` exposes the final `request_mode` so the operator can see whether the endpoint accepted the standard or minimal shape.
+- As of 2026-04-01, the repo now has live generic-provider evidence against `https://open.bigmodel.cn/api/coding/paas/v4` with model `GLM-4.7`, which means the generic boundary is proven on one real OpenAI-compatible endpoint instead of only local stubs or missing-config paths.
 - Smoke:
 
 ```bash
@@ -176,6 +212,16 @@ CLAW_MODEL="gpt-4.1-mini" \
 
 CLAW_PROVIDER_MATRIX=generic \
 ./scripts/qa.sh provider-matrix
+
+set -a
+source .env.local
+set +a
+
+CLAW_PROVIDER_LIVE=generic \
+CLAW_GENERIC_LIVE_BASE_URL="https://open.bigmodel.cn/api/coding/paas/v4" \
+CLAW_GENERIC_LIVE_API_KEY="$GLM_API_KEY" \
+CLAW_GENERIC_LIVE_MODEL="GLM-4.7" \
+./scripts/qa.sh provider-live
 ```
 
 Authenticated generic endpoint:

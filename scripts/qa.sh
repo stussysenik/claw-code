@@ -10,11 +10,11 @@ case "$mode" in
   validate)
     exec "$ROOT/scripts/validate-repo.sh"
     ;;
-  core|native|adapters|provider|provider-matrix|daemon|recovery|release)
+  core|native|adapters|provider|provider-matrix|provider-live|daemon|recovery|release)
     exec "$ROOT/scripts/ralph-${mode}.sh" "$@"
     ;;
   *)
-    printf 'usage: %s [validate|core|native|adapters|provider|provider-matrix|daemon|recovery|release] [args...]\n' "${BASH_SOURCE[0]}" >&2
+    printf 'usage: %s [validate|core|native|adapters|provider|provider-matrix|provider-live|daemon|recovery|release] [args...]\n' "${BASH_SOURCE[0]}" >&2
     exit 2
     ;;
 esac

@@ -27,6 +27,19 @@ defmodule ClawCode.QAScriptTest do
     assert output =~ "recovery Ralph loop complete"
   end
 
+  test "qa.sh dispatches the provider-live Ralph loop" do
+    {output, status} =
+      System.cmd("bash", ["scripts/qa.sh", "provider-live"],
+        cd: File.cwd!(),
+        env: [{"RALPH_MAX_CYCLES", "0"}],
+        stderr_to_stdout: true
+      )
+
+    assert status == 0
+    assert output =~ "running provider-live Ralph loop"
+    assert output =~ "provider-live Ralph loop complete"
+  end
+
   test "qa.sh dispatches the release Ralph loop" do
     {output, status} =
       System.cmd("bash", ["scripts/qa.sh", "release"],

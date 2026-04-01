@@ -26,7 +26,7 @@ What is already strong:
 
 What still blocks daily-driver use:
 
-- Phase 2 still needs the remaining live smoke evidence for Kimi and one generic OpenAI-compatible endpoint. GLM and NIM are already proven, the current live vision-capable GLM path in this repo is `GLM-4.6V`, and the split path `GLM-5.1` reasoning plus `GLM-4.6V` vision has now also been proven through `chat` and the TUI.
+- Phase 2 still needs the remaining live smoke evidence for Kimi. GLM and NIM are already proven, one generic OpenAI-compatible endpoint is now also proven against the BigModel coding URL through the `generic` provider surface, the current live vision-capable GLM path in this repo is `GLM-4.6V`, and the split path `GLM-5.1` reasoning plus `GLM-4.6V` vision has now also been proven through `chat` and the TUI.
 - Phase 6 still needs the final release-candidate decision record, and release-config changes still require explicit `npm run release:dry-run` evidence.
 
 That means the right claim today is: promising daily-driver candidate, not main-tool ready.
@@ -153,8 +153,8 @@ These are valuable, but they should not delay the daily-driver bar.
 
 ### P0: Close The OpenSpec Blockers
 
-1. Capture live provider evidence for GLM, Kimi, NIM, and one generic endpoint.
-2. Prove the split-backbone path against a real preferred provider combination, then close the remaining Kimi and generic evidence gaps.
+1. Capture the remaining live provider evidence for Kimi.
+2. Keep the split-backbone path proven against the current preferred provider combination while closing the remaining Kimi evidence gap.
 3. Record the first release-candidate decision with current evidence links.
 4. Keep `npm run release:dry-run` evidence attached to any future release-config change.
 

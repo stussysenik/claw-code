@@ -20,12 +20,12 @@ What is already green:
 - one structured Common Lisp-backed tool path beyond raw eval
 - recovery playbooks and recovery Ralph loop
 - live GLM and NIM operator use in this environment
+- one live generic OpenAI-compatible endpoint proof against the BigModel coding URL
 - multimodal and split-vision proof through `chat` and the TUI
 
 What is still open:
 
 - live Kimi proof once credentials are available
-- one live generic OpenAI-compatible endpoint proof
 - the final release-candidate decision recorded in `progress.md`
 - `npm run release:dry-run` evidence whenever release-config files change
 
@@ -50,11 +50,12 @@ Use this as the short pre-RC checklist:
 4. `./scripts/qa.sh adapters`
 5. `./scripts/qa.sh provider`
 6. `./scripts/qa.sh provider-matrix`
-7. `./scripts/qa.sh daemon`
-8. `./scripts/qa.sh recovery`
-9. `./scripts/qa.sh release`
-10. `npm run release:dry-run` if the branch changed `.releaserc.json`, `package.json`, or release workflows
-11. Record the resulting RC or non-RC decision in `progress.md`
+7. `./scripts/qa.sh provider-live` when you are claiming current live provider evidence
+8. `./scripts/qa.sh daemon`
+9. `./scripts/qa.sh recovery`
+10. `./scripts/qa.sh release`
+11. `npm run release:dry-run` if the branch changed `.releaserc.json`, `package.json`, or release workflows
+12. Record the resulting RC or non-RC decision in `progress.md`
 
 ## Live Smoke Matrix
 
@@ -65,10 +66,11 @@ Use this as the short pre-RC checklist:
 | Native disabled | `./claw_code symphony --no-native "review MCP tool"` | routing summary still renders with explicit disabled path | green |
 | Adapters | `./scripts/qa.sh adapters` | Python, Lua, and Common Lisp receipts stay explicit under failure and timeout | green |
 | Provider matrix | `./scripts/qa.sh provider-matrix` | each provider reports either live success or explicit `missing_config` | green |
+| Live provider lane | `./scripts/qa.sh provider-live` | selected providers must all pass `doctor -> probe -> chat` live | green |
 | Preferred GLM lane | `./claw_code probe --provider glm --model GLM-5.1 "Reply with OK."` | probe succeeds with a live response preview | green |
 | NIM lane | `./claw_code probe --provider nim "Reply with OK."` | probe succeeds or reports an explicit upstream failure | green |
 | Kimi lane | `./claw_code probe --provider kimi "Reply with OK."` | probe succeeds with live provider output | pending credentials |
-| Generic endpoint lane | `./claw_code probe --provider generic --base-url ... --api-key ... "Reply with OK."` | probe succeeds against one real OpenAI-compatible endpoint | pending endpoint |
+| Generic endpoint lane | `./claw_code probe --provider generic --base-url https://open.bigmodel.cn/api/coding/paas/v4 --api-key ... --model GLM-4.7 "Reply with OK."` | probe succeeds against one real OpenAI-compatible endpoint | green |
 | Daemon continuity | `./scripts/qa.sh daemon` | daemon-backed session loop stays continuous across CLI invocations | green |
 | Recovery | `./scripts/qa.sh recovery` | stale daemon, abandoned runs, invalid sessions, and root mismatch stay explicit | green |
 | TUI operator loop | `printf 'open latest-completed\nquit\n' \| ./claw_code tui --provider glm --model GLM-5.1 --no-tools --session-root ... --daemon-root ...` | header renders provider health and the selected session opens without raw session surgery | green |
@@ -82,5 +84,4 @@ Do not call the repo daily-driver beta yet.
 The remaining blockers are external proof, not architecture ambiguity:
 
 - add Kimi credentials and capture live `probe`, `chat`, and TUI evidence
-- capture one live generic endpoint proof through the same surfaces
 - record the first explicit release-candidate decision in `progress.md`

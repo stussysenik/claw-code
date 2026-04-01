@@ -68,6 +68,7 @@ The preserved operator workflows from the archived workspace are documented in [
 - [scripts/ralph-adapters.sh](./scripts/ralph-adapters.sh)
 - [scripts/ralph-provider.sh](./scripts/ralph-provider.sh)
 - [scripts/ralph-provider-matrix.sh](./scripts/ralph-provider-matrix.sh)
+- [scripts/ralph-provider-live.sh](./scripts/ralph-provider-live.sh)
 - [scripts/ralph-daemon.sh](./scripts/ralph-daemon.sh)
 - [scripts/ralph-recovery.sh](./scripts/ralph-recovery.sh)
 - [scripts/ralph-release.sh](./scripts/ralph-release.sh)
@@ -108,6 +109,7 @@ Canonical QA dispatcher:
 ./scripts/qa.sh adapters
 ./scripts/qa.sh provider "say hello and report the configured provider"
 ./scripts/qa.sh provider-matrix
+./scripts/qa.sh provider-live
 ./scripts/qa.sh daemon
 ./scripts/qa.sh recovery
 ./scripts/qa.sh release
@@ -212,7 +214,7 @@ Core operator commands now also support `--json`, which is the intended first co
 
 `./claw_code doctor` now reports whether the active provider is fully configured, which request URL will be used, which input modalities the provider boundary accepts, and whether each field came from an env var, a default, or is still missing.
 
-`./claw_code providers` is the matrix view for the whole supported provider set, including input-modality support, and `./scripts/qa.sh provider-matrix` is the corresponding Ralph loop for pre-RC validation.
+`./claw_code providers` is the matrix view for the whole supported provider set, including input-modality support, `./scripts/qa.sh provider-matrix` is the corresponding pre-RC matrix loop, and `./scripts/qa.sh provider-live` is the strict live-success lane when you want current real-provider evidence instead of missing-config acceptance.
 
 ## Release Automation
 
