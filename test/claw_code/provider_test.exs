@@ -175,6 +175,36 @@ defmodule ClawCode.ProviderTest do
     )
   end
 
+  test "provider-specific config ignores shared claw env across providers" do
+    with_env(
+      %{
+        "KIMI_BASE_URL" => nil,
+        "MOONSHOT_BASE_URL" => nil,
+        "CLAW_BASE_URL" => "https://integrate.api.nvidia.com/v1",
+        "KIMI_MODEL" => nil,
+        "MOONSHOT_MODEL" => nil,
+        "CLAW_MODEL" => "meta/llama-3.1-8b-instruct",
+        "KIMI_API_KEY" => nil,
+        "MOONSHOT_API_KEY" => nil,
+        "CLAW_API_KEY" => "nim-shared-key"
+      },
+      fn ->
+        config = OpenAICompatible.resolve_config(provider: "kimi")
+        diagnostics = OpenAICompatible.diagnostics(provider: "kimi")
+
+        assert config.provider == "kimi"
+        assert config.base_url == "https://api.moonshot.ai/v1"
+        assert config.model == "kimi-k2.5"
+        assert config.api_key == nil
+        assert diagnostics.configured == false
+        assert diagnostics.fields.base_url.source == "default"
+        assert diagnostics.fields.model.source == "default"
+        assert diagnostics.fields.api_key.source == "missing"
+        assert :api_key in diagnostics.missing_fields
+      end
+    )
+  end
+
   test "generic provider profile exposes compatible fallback capabilities" do
     with_env(
       %{

@@ -256,25 +256,25 @@ defmodule ClawCode.Providers.OpenAICompatible do
 
   def required_env_vars("glm") do
     %{
-      base_url: ["GLM_BASE_URL", "BIGMODEL_BASE_URL", "CLAW_BASE_URL"],
-      api_key: ["GLM_API_KEY", "BIGMODEL_API_KEY", "CLAW_API_KEY"],
-      model: ["GLM_MODEL", "BIGMODEL_MODEL", "CLAW_MODEL"]
+      base_url: ["GLM_BASE_URL", "BIGMODEL_BASE_URL"],
+      api_key: ["GLM_API_KEY", "BIGMODEL_API_KEY"],
+      model: ["GLM_MODEL", "BIGMODEL_MODEL"]
     }
   end
 
   def required_env_vars("nim") do
     %{
-      base_url: ["NIM_BASE_URL", "NVIDIA_BASE_URL", "CLAW_BASE_URL"],
-      api_key: ["NIM_API_KEY", "NVIDIA_API_KEY", "CLAW_API_KEY"],
-      model: ["NIM_MODEL", "NVIDIA_MODEL", "CLAW_MODEL"]
+      base_url: ["NIM_BASE_URL", "NVIDIA_BASE_URL"],
+      api_key: ["NIM_API_KEY", "NVIDIA_API_KEY"],
+      model: ["NIM_MODEL", "NVIDIA_MODEL"]
     }
   end
 
   def required_env_vars("kimi") do
     %{
-      base_url: ["KIMI_BASE_URL", "MOONSHOT_BASE_URL", "CLAW_BASE_URL"],
-      api_key: ["KIMI_API_KEY", "MOONSHOT_API_KEY", "CLAW_API_KEY"],
-      model: ["KIMI_MODEL", "MOONSHOT_MODEL", "CLAW_MODEL"]
+      base_url: ["KIMI_BASE_URL", "MOONSHOT_BASE_URL"],
+      api_key: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+      model: ["KIMI_MODEL", "MOONSHOT_MODEL"]
     }
   end
 
@@ -355,18 +355,15 @@ defmodule ClawCode.Providers.OpenAICompatible do
   def default_model(_provider), do: nil
 
   defp provider_base_url("glm") do
-    env("GLM_BASE_URL") || env("BIGMODEL_BASE_URL") || env("CLAW_BASE_URL") ||
-      default_base_url("glm")
+    env("GLM_BASE_URL") || env("BIGMODEL_BASE_URL") || default_base_url("glm")
   end
 
   defp provider_base_url("nim") do
-    env("NIM_BASE_URL") || env("NVIDIA_BASE_URL") || env("CLAW_BASE_URL") ||
-      default_base_url("nim")
+    env("NIM_BASE_URL") || env("NVIDIA_BASE_URL") || default_base_url("nim")
   end
 
   defp provider_base_url("kimi") do
-    env("KIMI_BASE_URL") || env("MOONSHOT_BASE_URL") || env("CLAW_BASE_URL") ||
-      default_base_url("kimi")
+    env("KIMI_BASE_URL") || env("MOONSHOT_BASE_URL") || default_base_url("kimi")
   end
 
   defp provider_base_url(_provider) do
@@ -374,15 +371,15 @@ defmodule ClawCode.Providers.OpenAICompatible do
   end
 
   defp provider_api_key("glm") do
-    env("GLM_API_KEY") || env("BIGMODEL_API_KEY") || env("CLAW_API_KEY")
+    env("GLM_API_KEY") || env("BIGMODEL_API_KEY")
   end
 
   defp provider_api_key("nim") do
-    env("NIM_API_KEY") || env("NVIDIA_API_KEY") || env("CLAW_API_KEY")
+    env("NIM_API_KEY") || env("NVIDIA_API_KEY")
   end
 
   defp provider_api_key("kimi") do
-    env("KIMI_API_KEY") || env("MOONSHOT_API_KEY") || env("CLAW_API_KEY")
+    env("KIMI_API_KEY") || env("MOONSHOT_API_KEY")
   end
 
   defp provider_api_key(_provider) do
@@ -390,16 +387,15 @@ defmodule ClawCode.Providers.OpenAICompatible do
   end
 
   defp provider_model("glm") do
-    env("GLM_MODEL") || env("BIGMODEL_MODEL") || env("CLAW_MODEL") || default_model("glm")
+    env("GLM_MODEL") || env("BIGMODEL_MODEL") || default_model("glm")
   end
 
   defp provider_model("nim") do
-    env("NIM_MODEL") || env("NVIDIA_MODEL") || env("CLAW_MODEL") ||
-      default_model("nim")
+    env("NIM_MODEL") || env("NVIDIA_MODEL") || default_model("nim")
   end
 
   defp provider_model("kimi") do
-    env("KIMI_MODEL") || env("MOONSHOT_MODEL") || env("CLAW_MODEL") || default_model("kimi")
+    env("KIMI_MODEL") || env("MOONSHOT_MODEL") || default_model("kimi")
   end
 
   defp provider_model(_provider) do

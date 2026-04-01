@@ -194,6 +194,8 @@ Provider contracts are documented in [docs/providers.md](./docs/providers.md). `
 
 The checked-in template is [`.env.local.example`](./.env.local.example). Copy it to `.env.local`, uncomment one provider block, and keep secrets local. The runtime load order is explicit: existing shell env wins, then `.env.local`, then `.env`.
 
+Provider-specific env resolution is now strict on purpose: `glm`, `kimi`, and `nim` only inherit their own provider-family env vars, while shared `CLAW_*` connection vars are reserved for the `generic` provider path and explicit generic endpoint proofs.
+
 `chat` and `resume-session` default to an `auto` tool policy: repo or tool-oriented prompts expose local tools, plain chat prompts do not. Use `--tools` to force tool specs on, `--no-tools` to force a chat-only request, or `CLAW_TOOL_MODE=auto|on|off` to set the default behavior across local and daemon-backed runs.
 
 `./claw_code doctor` now makes the active shell and write access explicit, `chat` results now echo the run permissions snapshot, and `load-session --show-receipts` now includes blocked-policy detail for destructive shell commands instead of only saying the tool was blocked.

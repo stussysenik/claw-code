@@ -18,6 +18,7 @@
 - Local runtime commands also autoload `.env.local` and `.env` when present.
 - Do not rely on committed secret files.
 - `claw_code` only needs one OpenAI-compatible contract: base URL, API key, and model.
+- Provider-specific providers now only inherit provider-specific env vars like `GLM_*`, `KIMI_*`, `MOONSHOT_*`, `NIM_*`, and `NVIDIA_*`; shared `CLAW_*` connection vars are reserved for the `generic` provider and explicit generic live-proof helpers.
 - Tool exposure defaults to `auto`: repo-oriented prompts expose tools, plain chat prompts do not. Use `--tools` to force tool specs on, `--no-tools` to force chat-only mode, or `CLAW_TOOL_MODE=auto|on|off` for env-driven defaults.
 - `chat` and `resume-session` accept repeated `--image PATH` flags; local image paths are validated before provider I/O, persisted in session state as replayable content parts, and only translated into OpenAI-style `image_url` payload parts at request time.
 - `chat` and `resume-session` also accept an optional split vision backbone through `--vision-provider`, `--vision-model`, `--vision-base-url`, `--vision-api-key`, and `--vision-api-key-header`; when enabled, `claw_code` derives replayable `vision_context` first and keeps the primary reasoning request text-only.
