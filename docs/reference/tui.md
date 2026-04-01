@@ -57,7 +57,17 @@ It stays intentionally small:
 
 ## Operator Quickstart
 
-For the normal local loop:
+For one stable shell launcher instead of running `./claw_code` from the repo root every time:
+
+```bash
+mix escript.build
+./claw_code install --as claw
+claw
+```
+
+The installed launcher opens the TUI by default with no arguments and still forwards explicit subcommands like `claw chat ...` or `claw daemon start`. Use `./claw_code install --as snik`, `--bin-dir /custom/path`, or `--force` when you want a different launcher name, location, or replacement behavior.
+
+For the normal local loop without installing a launcher:
 
 ```bash
 ./claw_code tui --provider generic

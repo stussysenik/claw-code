@@ -143,6 +143,7 @@ Required outputs:
 - tighter provider/model/tool-policy visibility
 - multimodal `chat` and `resume` forwarding that stays inside the thin-client daemon/runtime path
 - session and transcript navigation that stays fast as the session root grows
+- a stable launcher install path that lets the operator open the TUI from `PATH` without repo-specific wrappers
 - a small set of keyboard-friendly or alias-friendly workflows that cover most daily use
 
 Suggested Ralph loop:
@@ -152,6 +153,7 @@ Suggested Ralph loop:
 Exit criteria:
 
 - an operator can spend a few hours in `./claw_code tui` without constantly dropping to raw commands
+- the operator can also enter that same loop from one stable launcher command after a local install
 - the TUI remains a thin client instead of accumulating runtime logic
 
 ### Phase 5: Long-Run Operations

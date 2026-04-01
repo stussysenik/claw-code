@@ -14,6 +14,7 @@
 - [Canonical Operator Layer](#canonical-operator-layer)
 - [OpenSpec Roadmap](#openspec-roadmap)
 - [Working Commands](#working-commands)
+- [Install Launcher](#install-launcher)
 - [Session Resume](#session-resume)
 - [Persistent Control Plane](#persistent-control-plane)
 - [Provider Setup](#provider-setup)
@@ -130,6 +131,34 @@ mix escript.build
 ./claw_code symphony --no-native "review MCP tool"
 ./claw_code chat --allow-shell --allow-write "inspect the repo and propose a minimal plan"
 ```
+
+## Install Launcher
+
+When you want one stable shell command instead of running from the repo root every time:
+
+```bash
+mix escript.build
+./claw_code install --as claw
+```
+
+That writes a launcher to `~/.local/bin/claw` by default. If that directory is not already in `PATH`, add the snippet the installer prints:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+After that, `claw` becomes the entrypoint:
+
+```bash
+claw
+claw chat --provider glm --model GLM-5.1 --no-tools "say hello"
+claw daemon start
+claw providers
+```
+
+The installed launcher opens the TUI by default when you call it with no arguments, and forwards every explicit subcommand to the underlying `claw_code` escript.
+
+Use `./claw_code install --as snik`, `./claw_code install --bin-dir /custom/path`, or `./claw_code install --force` when you want a different launcher name, location, or replacement behavior.
 
 ## Session Resume
 

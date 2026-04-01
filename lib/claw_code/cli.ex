@@ -15,6 +15,7 @@ defmodule ClawCode.CLI do
   alias ClawCode.Providers.OpenAICompatible
 
   @switches [
+    as: :string,
     limit: :integer,
     query: :string,
     image: :keep,
@@ -43,10 +44,15 @@ defmodule ClawCode.CLI do
     native: :boolean,
     no_native: :boolean,
     no_daemon: :boolean,
+    force: :boolean,
+    bin_dir: :string,
     session_root: :string,
     daemon_root: :string,
     daemon_timeout_ms: :integer
   ]
+
+  @default_launcher "claw"
+  @default_bin_dir "~/.local/bin"
 
   def main(argv) do
     Application.ensure_all_started(:claw_code)
@@ -79,6 +85,17 @@ defmodule ClawCode.CLI do
             Manifest.render_provider_matrix(opts)
           end)
 
+          0
+        else
+          {:error, message} ->
+            emit_error(message, json_requested?(rest))
+            1
+        end
+
+      ["install" | rest] ->
+        with {:ok, opts, _args} <- parse_opts(rest),
+             {:ok, payload} <- install_launcher(opts) do
+          emit_value(payload, opts, fn -> render_install(payload) end)
           0
         else
           {:error, message} ->
@@ -1132,6 +1149,179 @@ defmodule ClawCode.CLI do
   defp render_missing_fields([]), do: "none"
   defp render_missing_fields(fields), do: Enum.map_join(fields, ", ", &to_string/1)
 
+  defp render_install(payload) do
+    [
+      "# Install",
+      "",
+      "- launcher: #{map_value(payload, :launcher)}",
+      "- launcher_path: #{map_value(payload, :launcher_path)}",
+      "- source: #{map_value(payload, :source)}",
+      "- action: #{map_value(payload, :action)}",
+      "- default_command: #{map_value(payload, :default_command)}",
+      "- path_status: #{map_value(payload, :path_status)}",
+      "- shell_snippet: #{map_value(payload, :shell_snippet)}"
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp install_launcher(opts) do
+    with {:ok, source} <- install_source_path(),
+         {:ok, launcher} <- validate_launcher_name(Keyword.get(opts, :as, @default_launcher)),
+         bin_dir <- install_bin_dir(opts),
+         :ok <-
+           normalize_file_result(File.mkdir_p(bin_dir), "Could not create bin dir: #{bin_dir}"),
+         launcher_path <- Path.join(bin_dir, launcher),
+         script <- launcher_script(source),
+         {:ok, action} <- write_launcher(launcher_path, script, Keyword.get(opts, :force, false)) do
+      {:ok,
+       %{
+         launcher: launcher,
+         launcher_path: launcher_path,
+         source: source,
+         action: action,
+         default_command: "tui",
+         path_status: path_status(bin_dir),
+         shell_snippet: shell_snippet(bin_dir)
+       }}
+    end
+  end
+
+  defp install_source_path do
+    case install_source_candidates() |> Enum.find(&install_source?/1) do
+      nil ->
+        {:error,
+         "Install needs a built escript. Run `mix escript.build` first or set `CLAW_INSTALL_SOURCE`."}
+
+      source ->
+        {:ok, Path.expand(source)}
+    end
+  end
+
+  defp install_source_candidates do
+    env_source =
+      case System.get_env("CLAW_INSTALL_SOURCE") do
+        value when is_binary(value) and value != "" -> [value]
+        _other -> []
+      end
+
+    script_source =
+      case safe_script_name() do
+        value when is_binary(value) and value != "" -> [value]
+        _other -> []
+      end
+
+    local_source =
+      case File.cwd() do
+        {:ok, cwd} -> [Path.join(cwd, "claw_code")]
+        _other -> []
+      end
+
+    env_source ++ script_source ++ local_source
+  end
+
+  defp safe_script_name do
+    case :escript.script_name() do
+      [] -> nil
+      value when is_list(value) -> List.to_string(value)
+      value when is_binary(value) -> value
+      _other -> nil
+    end
+  rescue
+    _error -> nil
+  end
+
+  defp install_source?(path) when is_binary(path), do: File.regular?(path)
+  defp install_source?(_path), do: false
+
+  defp install_bin_dir(opts) do
+    opts
+    |> Keyword.get(:bin_dir, @default_bin_dir)
+    |> Path.expand()
+  end
+
+  defp validate_launcher_name(name) when is_binary(name) do
+    if name != "" and not String.contains?(name, ["/", "\\", " "]) do
+      {:ok, name}
+    else
+      {:error, "Launcher name must be a single path-safe token without spaces or slashes."}
+    end
+  end
+
+  defp validate_launcher_name(_name) do
+    {:error, "Launcher name must be a single path-safe token without spaces or slashes."}
+  end
+
+  defp normalize_file_result(:ok, _message), do: :ok
+
+  defp normalize_file_result({:error, reason}, message),
+    do: {:error, "#{message}: #{inspect(reason)}"}
+
+  defp launcher_script(source) do
+    quoted_source = shell_double_quote(source)
+
+    """
+    #!/bin/sh
+    set -eu
+
+    if [ "$#" -eq 0 ]; then
+      exec "#{quoted_source}" tui
+    fi
+
+    exec "#{quoted_source}" "$@"
+    """
+  end
+
+  defp shell_double_quote(value) do
+    value
+    |> String.replace("\\", "\\\\")
+    |> String.replace("\"", "\\\"")
+    |> String.replace("$", "\\$")
+    |> String.replace("`", "\\`")
+  end
+
+  defp write_launcher(path, script, force?) do
+    existed? = File.exists?(path)
+
+    cond do
+      existed? and not force? ->
+        case File.read(path) do
+          {:ok, ^script} ->
+            {:ok, "unchanged"}
+
+          _other ->
+            {:error, "Launcher already exists: #{path}. Re-run with `--force` to replace it."}
+        end
+
+      true ->
+        with :ok <-
+               normalize_file_result(
+                 File.write(path, script),
+                 "Could not write launcher: #{path}"
+               ),
+             :ok <-
+               normalize_file_result(File.chmod(path, 0o755), "Could not chmod launcher: #{path}") do
+          {:ok, if(existed? and force?, do: "replaced", else: "installed")}
+        end
+    end
+  end
+
+  defp path_status(bin_dir) do
+    expanded = Path.expand(bin_dir)
+
+    System.get_env("PATH", "")
+    |> String.split(":", trim: true)
+    |> Enum.map(&Path.expand/1)
+    |> Enum.member?(expanded)
+    |> case do
+      true -> "present"
+      false -> "missing"
+    end
+  end
+
+  defp shell_snippet(bin_dir) do
+    "export PATH=\"#{bin_dir}:$PATH\""
+  end
+
   defp help do
     """
     claw_code <command>
@@ -1141,6 +1331,7 @@ defmodule ClawCode.CLI do
       manifest
       doctor [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--api-key-header HEADER] [--tools|--no-tools] [--json]
       providers [--json]
+      install [--as NAME] [--bin-dir PATH] [--force] [--json]
       probe [prompt] [--image PATH]... [--provider glm|nim|kimi|generic] [--model MODEL] [--base-url URL] [--api-key KEY] [--api-key-header HEADER] [--json]
       daemon serve [--daemon-root PATH] [--session-root PATH]
       daemon start [--daemon-root PATH] [--session-root PATH] [--json]

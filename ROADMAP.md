@@ -12,13 +12,14 @@
 
 ## Status Today
 
-As of 2026-04-01, `claw_code` is not yet ready to be the main tool.
+As of 2026-04-02, `claw_code` is not yet ready to be the main tool.
 
 What is already strong:
 
 - explicit, replayable session state under `.claw/sessions/`
 - a local daemon with inspect, resume, cancel, and status paths
 - a TUI that stays on the thin-client side of the daemon/runtime boundary
+- a stable local launcher install path that can drop the operator straight into the TUI from `PATH`
 - provider capability visibility through `doctor`, `probe`, `providers`, and the TUI
 - provider-agnostic multimodal image input persistence and replay
 - an optional split vision-backbone path, so a stronger reasoning model can be paired with a different vision-capable model without breaking replayability

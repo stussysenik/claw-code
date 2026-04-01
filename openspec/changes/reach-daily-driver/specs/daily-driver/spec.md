@@ -172,6 +172,19 @@ The TUI MUST cover the normal local operator loop without becoming a second runt
 - **THEN** the header or footer exposes provider/model/tool-policy plus compact provider-health and selected-session-health summaries
 - **AND** the UI still relies on runtime-derived state instead of duplicating provider logic
 
+### Requirement: Stable Local Launcher
+
+`claw_code` MUST provide an installable local launcher so the operator can enter the TUI and CLI loop from `PATH` without repo-specific shell glue.
+
+#### Scenario: Install a stable launcher that defaults to the TUI
+
+- **GIVEN** the operator has built the local `claw_code` escript
+- **WHEN** they run `./claw_code install`
+- **THEN** a stable launcher is created in the selected bin directory
+- **AND** invoking that launcher with no arguments opens the TUI
+- **AND** invoking that launcher with arguments forwards them to the existing CLI surface
+- **AND** PATH guidance is explicit instead of assumed
+
 ### Requirement: Optional Native Acceleration
 
 Native optimization MUST remain optional and never become a correctness dependency.

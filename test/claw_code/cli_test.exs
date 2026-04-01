@@ -9,6 +9,126 @@ defmodule ClawCode.CLITest do
     assert output =~ "# Claw Code Elixir"
   end
 
+  test "install creates a stable launcher that opens the TUI by default" do
+    root = Path.join(System.tmp_dir!(), "claw-code-cli-install-#{SessionStore.new_id()}")
+    bin_dir = Path.join(root, "bin")
+    source_path = Path.join(root, "claw_code")
+    previous_install_source = System.get_env("CLAW_INSTALL_SOURCE")
+    previous_path = System.get_env("PATH")
+
+    on_exit(fn ->
+      restore_env("CLAW_INSTALL_SOURCE", previous_install_source)
+      restore_env("PATH", previous_path)
+      File.rm_rf(root)
+    end)
+
+    File.mkdir_p!(bin_dir)
+
+    File.write!(
+      source_path,
+      """
+      #!/bin/sh
+      printf '%s\\n' "$@"
+      """
+    )
+
+    File.chmod!(source_path, 0o755)
+    System.put_env("CLAW_INSTALL_SOURCE", source_path)
+    System.put_env("PATH", "/usr/bin:/bin")
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["install", "--as", "claw", "--bin-dir", bin_dir]) == 0
+      end)
+
+    launcher_path = Path.join(bin_dir, "claw")
+    launcher = File.read!(launcher_path)
+
+    assert output =~ "# Install"
+    assert output =~ "- launcher: claw"
+    assert output =~ "- default_command: tui"
+    assert output =~ "- path_status: missing"
+    assert output =~ "- shell_snippet: export PATH=\"#{bin_dir}:$PATH\""
+    assert launcher =~ "exec \"#{source_path}\" tui"
+    assert launcher =~ "exec \"#{source_path}\" \"$@\""
+
+    assert {default_output, 0} = System.cmd(launcher_path, [])
+    assert default_output == "tui\n"
+
+    assert {summary_output, 0} = System.cmd(launcher_path, ["summary"])
+    assert summary_output == "summary\n"
+  end
+
+  test "install refuses to overwrite an existing launcher without force" do
+    root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-install-conflict-#{SessionStore.new_id()}")
+
+    bin_dir = Path.join(root, "bin")
+    launcher_path = Path.join(bin_dir, "claw")
+    source_path = Path.join(root, "claw_code")
+    previous_install_source = System.get_env("CLAW_INSTALL_SOURCE")
+
+    on_exit(fn ->
+      restore_env("CLAW_INSTALL_SOURCE", previous_install_source)
+      File.rm_rf(root)
+    end)
+
+    File.mkdir_p!(bin_dir)
+    File.write!(launcher_path, "#!/bin/sh\nexit 0\n")
+    File.write!(source_path, "#!/bin/sh\nexit 0\n")
+    File.chmod!(launcher_path, 0o755)
+    File.chmod!(source_path, 0o755)
+    System.put_env("CLAW_INSTALL_SOURCE", source_path)
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["install", "--as", "claw", "--bin-dir", bin_dir]) == 1
+      end)
+
+    assert output =~ "Launcher already exists"
+    assert output =~ launcher_path
+  end
+
+  test "install can replace an existing launcher with force" do
+    root =
+      Path.join(System.tmp_dir!(), "claw-code-cli-install-force-#{SessionStore.new_id()}")
+
+    bin_dir = Path.join(root, "bin")
+    launcher_path = Path.join(bin_dir, "claw")
+    source_path = Path.join(root, "claw_code")
+    previous_install_source = System.get_env("CLAW_INSTALL_SOURCE")
+
+    on_exit(fn ->
+      restore_env("CLAW_INSTALL_SOURCE", previous_install_source)
+      File.rm_rf(root)
+    end)
+
+    File.mkdir_p!(bin_dir)
+    File.write!(launcher_path, "#!/bin/sh\necho old\n")
+
+    File.write!(
+      source_path,
+      """
+      #!/bin/sh
+      printf '%s\\n' "$@"
+      """
+    )
+
+    File.chmod!(launcher_path, 0o755)
+    File.chmod!(source_path, 0o755)
+    System.put_env("CLAW_INSTALL_SOURCE", source_path)
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["install", "--force", "--as", "claw", "--bin-dir", bin_dir]) == 0
+      end)
+
+    assert output =~ "- action: replaced"
+
+    assert {default_output, 0} = System.cmd(launcher_path, [])
+    assert default_output == "tui\n"
+  end
+
   test "doctor renders provider diagnostics" do
     output = capture_io(fn -> assert CLI.run(["doctor"]) == 0 end)
 
@@ -2062,4 +2182,7 @@ defmodule ClawCode.CLITest do
 
     path
   end
+
+  defp restore_env(key, nil), do: System.delete_env(key)
+  defp restore_env(key, value), do: System.put_env(key, value)
 end
