@@ -19,8 +19,8 @@
 
 ## Phase 1: Workflow Parity And Session Durability
 
-- [ ] Create a parity note for the essential workflows worth preserving from the original `stussysenik/claw-code` repo.
-- [ ] Add stronger active-run and failed-run inspection for daemon-backed sessions.
+- [x] Create a parity note for the essential workflows worth preserving from the original `stussysenik/claw-code` repo.
+- [x] Add stronger active-run and failed-run inspection for daemon-backed sessions.
 - [ ] Prove resume/cancel/replay behavior across repeated shell exits and daemon restarts.
 - [ ] Add one explicit stale-session recovery test and one stale-daemon recovery smoke path for the daily-driver checklist.
 - [ ] Tighten session-root hygiene so corrupted or partial state fails clearly and locally.

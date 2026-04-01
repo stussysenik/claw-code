@@ -10,6 +10,9 @@ defmodule ClawCode.TUITest do
       %{
         "id" => "session-a",
         "updated_at" => "2026-03-31T19:00:00Z",
+        "provider" => %{"provider" => "glm", "model" => "glm-4.7"},
+        "prompt" => "inspect repo state",
+        "output" => "world",
         "stop_reason" => "completed",
         "run_state" => %{
           "status" => "idle",
@@ -37,6 +40,9 @@ defmodule ClawCode.TUITest do
       selected_session_id: "session-a",
       selected_session: %{
         "id" => "session-a",
+        "provider" => %{"provider" => "glm", "model" => "glm-4.7"},
+        "prompt" => "inspect repo state",
+        "output" => "world",
         "stop_reason" => "completed",
         "run_state" => %{
           "status" => "idle",
@@ -64,14 +70,20 @@ defmodule ClawCode.TUITest do
     assert output =~ "selected_run=idle last_stop=completed"
     assert output =~ "selected_receipt=none"
     assert output =~ "started=- finished=2026-03-31T19:01:00Z last_stop=completed"
+    assert output =~ "provider=glm model=glm-4.7"
+    assert output =~ "prompt=inspect repo state"
+    assert output =~ "output=world"
     assert output =~ "last_receipt=none"
-    assert output =~ "session-a"
+    assert output =~ "session-a 2026-03-31T19:00:00Z run=idle stop=completed provider=glm"
     assert output =~ "assistant: world"
   end
 
   test "render surfaces running counts and last receipt summary" do
     running_session = %{
       "id" => "session-running",
+      "provider" => %{"provider" => "nim", "model" => "nvidia/model"},
+      "prompt" => "keep monitoring",
+      "output" => "still working",
       "stop_reason" => "running",
       "run_state" => %{
         "status" => "running",
@@ -120,6 +132,9 @@ defmodule ClawCode.TUITest do
     assert output =~ "runs=running:1 completed:1 failed:1"
     assert output =~ "selected_run=running since=2026-03-31T20:00:00Z"
     assert output =~ "selected_receipt=shell:ok:42ms"
+    assert output =~ "provider=nim model=nvidia/model"
+    assert output =~ "prompt=keep monitoring"
+    assert output =~ "output=still working"
     assert output =~ "last_receipt=shell ok 42ms 2026-03-31T20:00:02Z"
     assert output =~ "1. shell ok 42ms 2026-03-31T20:00:02Z"
   end

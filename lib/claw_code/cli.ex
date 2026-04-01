@@ -338,7 +338,17 @@ defmodule ClawCode.CLI do
       Enum.map_join(sessions, "\n", fn session ->
         summary = session_summary(session)
 
-        "#{summary.id}\t#{summary.updated_at}\trun=#{summary.run_status}\tstop=#{summary.stop_reason}\tmessages=#{summary.message_count}\treceipts=#{summary.receipt_count}"
+        [
+          summary.id,
+          summary.updated_at,
+          "run=#{summary.run_status}",
+          "stop=#{summary.stop_reason}",
+          "provider=#{summary.provider}",
+          "messages=#{summary.message_count}",
+          "receipts=#{summary.receipt_count}",
+          "output=#{summary.output_summary}"
+        ]
+        |> Enum.join("\t")
       end)
     ]
     |> Enum.join("\n")
@@ -350,8 +360,10 @@ defmodule ClawCode.CLI do
       updated_at: session["updated_at"] || session["saved_at"] || "unknown",
       stop_reason: session["stop_reason"] || "unknown",
       run_status: get_in(session, ["run_state", "status"]) || "unknown",
+      provider: session_provider(session),
       message_count: length(session["messages"] || []),
-      receipt_count: length(session["tool_receipts"] || [])
+      receipt_count: length(session["tool_receipts"] || []),
+      output_summary: summarize_text(session["output"] || "-")
     }
   end
 
@@ -359,16 +371,24 @@ defmodule ClawCode.CLI do
     requirements = session["requirements"] || []
     tool_receipts = session["tool_receipts"] || []
     messages = session["messages"] || []
+    run_state = session["run_state"] || %{}
 
     [
       session["id"],
       "created=#{session["created_at"] || session["saved_at"]}",
       "updated=#{session["updated_at"] || session["saved_at"]}",
+      "provider=#{session_provider(session)}",
+      "model=#{get_in(session, ["provider", "model"]) || "-"}",
       "#{length(messages)} messages",
       "requirements=#{length(requirements)}",
       "tool_receipts=#{length(tool_receipts)}",
-      "run=#{get_in(session, ["run_state", "status"]) || "unknown"}",
+      "run=#{run_state["status"] || "unknown"}",
       "stop=#{session["stop_reason"]}",
+      "started=#{run_state["started_at"] || "-"}",
+      "finished=#{run_state["finished_at"] || "-"}",
+      "last_stop=#{run_state["last_stop_reason"] || session["stop_reason"] || "-"}",
+      "prompt=#{summarize_text(session["prompt"] || "-")}",
+      "output=#{summarize_text(session["output"] || "-")}",
       render_messages(messages, Keyword.get(opts, :show_messages, false)),
       render_receipts(tool_receipts, Keyword.get(opts, :show_receipts, false))
     ]
@@ -433,6 +453,10 @@ defmodule ClawCode.CLI do
       receipt[:invocation] || receipt["invocation"] || receipt[:path] || receipt["path"] || ""
 
     "Last receipt: #{tool} #{status} #{duration_ms}ms #{summarize_text(invocation)}"
+  end
+
+  defp session_provider(session) do
+    get_in(session, ["provider", "provider"]) || "unknown"
   end
 
   defp permission_context(opts) do

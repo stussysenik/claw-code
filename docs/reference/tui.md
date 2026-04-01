@@ -31,6 +31,7 @@ It stays intentionally small:
 - recent session list
 - selected transcript and receipts
 - aggregate run counts plus selected-session run and receipt summaries
+- selected-session provider/model plus prompt/output summaries for faster failure inspection
 - optional `watch <seconds|on|off>` auto-refresh cadence for active monitoring
 - optional `follow <latest|running|latest-running|completed|failed|off>` auto-selection for active monitoring
 - `active` alias support plus `focus active` / `focus all` monitoring presets

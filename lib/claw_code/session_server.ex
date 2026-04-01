@@ -78,19 +78,31 @@ defmodule ClawCode.SessionServer do
   end
 
   def handle_call({:checkpoint, payload}, _from, state) do
-    payload =
-      Map.put(payload, "run_state", checkpoint_run_state(state))
-      |> Map.put_new("stop_reason", "running")
+    if is_nil(state.active_run) do
+      {:reply, {SessionStore.path(state.id, root: state.root), state.document}, state}
+    else
+      payload =
+        Map.put(payload, "run_state", checkpoint_run_state(state))
+        |> Map.put_new("stop_reason", "running")
 
-    {path, document, state} = persist_document(state, payload)
-    {:reply, {path, document}, state}
+      {path, document, state} = persist_document(state, payload)
+      {:reply, {path, document}, state}
+    end
+  end
+
+  def handle_call({:finish_run, _payload}, _from, %{active_run: nil} = state) do
+    # A late completion from a cancelled or crashed task must not overwrite
+    # the terminal state already persisted by the session server.
+    {:reply, {SessionStore.path(state.id, root: state.root), state.document}, state}
   end
 
   def handle_call({:finish_run, payload}, _from, state) do
-    stop_reason = payload["stop_reason"] || payload[:stop_reason] || "completed"
-
     payload =
-      Map.put(payload, "run_state", finished_run_state(stop_reason))
+      payload
+      |> Map.put(
+        "run_state",
+        finished_run_state(payload["stop_reason"] || payload[:stop_reason] || "completed")
+      )
 
     {path, document, state} =
       state

@@ -83,4 +83,37 @@ defmodule ClawCode.SessionServerTest do
     persisted = SessionStore.load(session_id, root: root)
     assert persisted["stop_reason"] == "cancelled"
   end
+
+  test "late finish_run does not overwrite a cancelled terminal state" do
+    root =
+      Path.join(System.tmp_dir!(), "claw-code-session-server-terminal-#{SessionStore.new_id()}")
+
+    File.rm_rf(root)
+
+    {:ok, session_id, pid} = SessionServer.ensure_started("session-terminal", root: root)
+
+    on_exit(fn ->
+      SessionServer.close(pid)
+    end)
+
+    assert {:ok, _document} = SessionServer.begin_run(pid)
+    task_pid = spawn(fn -> Process.sleep(5_000) end)
+    assert :ok = SessionServer.attach_run(pid, task_pid)
+    assert {:ok, {_path, cancelled}} = SessionServer.cancel_run(pid)
+    assert cancelled["stop_reason"] == "cancelled"
+
+    {_path, finished} =
+      SessionServer.finish_run(pid, %{
+        "prompt" => "should not win",
+        "output" => "late reply",
+        "stop_reason" => "completed"
+      })
+
+    assert finished["stop_reason"] == "cancelled"
+    assert finished["output"] == "Run cancelled."
+
+    persisted = SessionStore.load(session_id, root: root)
+    assert persisted["stop_reason"] == "cancelled"
+    assert persisted["output"] == "Run cancelled."
+  end
 end

@@ -829,10 +829,11 @@ defmodule ClawCode.TUI do
       updated_at = session["updated_at"] || session["saved_at"] || "unknown"
       run_status = get_in(session, ["run_state", "status"]) || "unknown"
       stop_reason = session["stop_reason"] || "unknown"
+      provider = session_provider(session)
       messages = length(session["messages"] || [])
       receipts = length(session["tool_receipts"] || [])
 
-      "#{marker} #{index}. #{session["id"]} #{updated_at} run=#{run_status} stop=#{stop_reason} messages=#{messages} receipts=#{receipts}"
+      "#{marker} #{index}. #{session["id"]} #{updated_at} run=#{run_status} stop=#{stop_reason} provider=#{provider} messages=#{messages} receipts=#{receipts}"
     end)
   end
 
@@ -843,8 +844,11 @@ defmodule ClawCode.TUI do
 
     [
       "id=#{session["id"]}",
+      "provider=#{session_provider(session)} model=#{get_in(session, ["provider", "model"]) || "-"}",
       "stop=#{session["stop_reason"] || "unknown"} run=#{get_in(session, ["run_state", "status"]) || "unknown"} turns=#{session["turns"] || 0}",
       render_run_metadata(session),
+      "prompt=#{summarize(session["prompt"] || "-")}",
+      "output=#{summarize(session["output"] || "-")}",
       render_last_receipt_summary(session),
       "messages:",
       render_messages(
@@ -1177,6 +1181,10 @@ defmodule ClawCode.TUI do
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n")
     |> String.downcase()
+  end
+
+  defp session_provider(session) do
+    get_in(session, ["provider", "provider"]) || "unknown"
   end
 
   defp message_search_text(%{"content" => content}) when is_binary(content), do: content

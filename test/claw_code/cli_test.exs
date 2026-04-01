@@ -273,11 +273,27 @@ defmodule ClawCode.CLITest do
 
     Application.put_env(:claw_code, :session_root, root)
 
-    SessionStore.save(%{id: "session-a", prompt: "hello", output: "world", messages: []},
+    SessionStore.save(
+      %{
+        id: "session-a",
+        prompt: "hello",
+        output: "world",
+        provider: %{provider: "glm", model: "glm-4.7"},
+        messages: []
+      },
       root: root
     )
 
-    SessionStore.save(%{id: "session-b", prompt: "hi", output: "there", messages: []}, root: root)
+    SessionStore.save(
+      %{
+        id: "session-b",
+        prompt: "hi",
+        output: "there",
+        provider: %{provider: "kimi", model: "kimi-k2.5"},
+        messages: []
+      },
+      root: root
+    )
 
     output =
       capture_io(fn ->
@@ -288,6 +304,8 @@ defmodule ClawCode.CLITest do
     assert output =~ "session-a"
     assert output =~ "session-b"
     assert output =~ "run=idle"
+    assert output =~ "provider=glm"
+    assert output =~ "output=there"
   end
 
   test "sessions command can render json" do
@@ -369,6 +387,13 @@ defmodule ClawCode.CLITest do
           prompt: "hello",
           output: "world",
           stop_reason: "completed",
+          provider: %{"provider" => "glm", "model" => "glm-4.7"},
+          run_state: %{
+            "status" => "idle",
+            "started_at" => "2026-04-01T00:10:00Z",
+            "finished_at" => "2026-04-01T00:10:04Z",
+            "last_stop_reason" => "completed"
+          },
           messages: [
             %{"role" => "system", "content" => "seed context"},
             %{"role" => "user", "content" => "inspect repo"}
@@ -398,6 +423,12 @@ defmodule ClawCode.CLITest do
     assert output =~ "Receipts:"
     assert output =~ "shell status=ok exit=0"
     assert output =~ "run=idle"
+    assert output =~ "provider=glm"
+    assert output =~ "model=glm-4.7"
+    assert output =~ "started=2026-04-01T00:10:00Z"
+    assert output =~ "finished=2026-04-01T00:10:04Z"
+    assert output =~ "prompt=hello"
+    assert output =~ "output=world"
   end
 
   test "load-session accepts latest-completed alias" do

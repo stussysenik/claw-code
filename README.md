@@ -9,6 +9,7 @@
 
 - [What Lives Here](#what-lives-here)
 - [Architecture Reference](#architecture-reference)
+- [Original Workflow Parity](#original-workflow-parity)
 - [Canonical Operator Layer](#canonical-operator-layer)
 - [OpenSpec Roadmap](#openspec-roadmap)
 - [Working Commands](#working-commands)
@@ -30,6 +31,10 @@
 ## Architecture Reference
 
 The right way to think about this repo is: `claw_code` is Elixir-first with a small Zig fast path, not a mixed-language app without a center. The canonical reference for that boundary is [docs/reference/architecture.md](./docs/reference/architecture.md).
+
+## Original Workflow Parity
+
+The preserved operator workflows from the archived workspace are documented in [docs/reference/original-workflow-parity.md](./docs/reference/original-workflow-parity.md). That note defines the parity target in workflow terms instead of chasing raw command-count parity.
 
 ## Canonical Operator Layer
 
@@ -125,6 +130,8 @@ Sessions live under `.claw/sessions/` and can be resumed by explicit id.
 
 `load-session` exposes `created=` and `updated=` timestamps together with message and receipt counts. `sessions` gives a fast index of recent session ids, run states, stop reasons, and receipt counts, and now accepts `--query` for substring search across ids, prompts, outputs, provider names, and message content. The direct runtime path still allows one active run per session id inside the same BEAM and checkpoints tool receipts/messages before the final provider reply lands. If you need cross-process control, use the daemon-backed path explicitly.
 
+The inspection surface is intentionally getting denser as the repo moves toward daily-driver status: `sessions` now includes provider and output summaries, while `load-session` shows provider/model plus run timing and stop metadata before the optional message and receipt details.
+
 ## Persistent Control Plane
 
 `claw_code` now has an explicit local daemon path for cross-process session ownership. It stays local-only and narrow: `daemon start`, `daemon status`, `daemon stop`, and daemon-backed `chat`, `resume-session`, and `cancel-session`.
@@ -142,7 +149,7 @@ The design goal is not a network service or a distributed node mesh. It is a bor
 
 The final UX can absolutely include a full terminal UI, and the correct layering stays engine first: the Elixir runtime and daemon remain the product core, and the TUI is a client over that control plane instead of the architectural center.
 
-`./claw_code tui` is the first in-repo slice of that client. It is intentionally minimal: recent sessions, selected transcript, tool receipts, aggregate run counts, selected-session run metadata, optional `watch` refresh cadence, `follow` targets like `running` or `latest-running`, an `active` alias plus `focus active` preset for monitoring live work, targeted `cancel active` / `cancel running` intervention, in-client provider/model/base-url switching with reset-to-default, session filtering and limits, substring `find`, transcript `find-msg` with `next-hit` / `prev-hit`, `open latest-completed`, targeted `resume latest ...`, provider `probe`, and a command loop for `chat`, `resume`, `open`, `next`, `prev`, `cancel`, and `tools`.
+`./claw_code tui` is the first in-repo slice of that client. It is intentionally minimal: recent sessions, selected transcript, prompt/output summaries, provider/model diagnostics, tool receipts, aggregate run counts, selected-session run metadata, optional `watch` refresh cadence, `follow` targets like `running` or `latest-running`, an `active` alias plus `focus active` preset for monitoring live work, targeted `cancel active` / `cancel running` intervention, in-client provider/model/base-url switching with reset-to-default, session filtering and limits, substring `find`, transcript `find-msg` with `next-hit` / `prev-hit`, `open latest-completed`, targeted `resume latest ...`, provider `probe`, and a command loop for `chat`, `resume`, `open`, `next`, `prev`, `cancel`, and `tools`.
 
 ## Provider Setup
 
