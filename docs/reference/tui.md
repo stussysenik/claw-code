@@ -65,7 +65,7 @@ mix escript.build
 pikachu
 ```
 
-The installed launcher opens the TUI by default with no arguments and still forwards explicit subcommands like `pikachu chat ...` or `pikachu daemon start`. Use `./claw_code install --as snik`, `--bin-dir /custom/path`, or `--force` when you want a different launcher name, location, or replacement behavior.
+The installed launcher opens a compact chat-first TUI by default with no arguments and still forwards explicit subcommands like `pikachu chat ...` or `pikachu daemon start`. Use `./claw_code install --as snik`, `--bin-dir /custom/path`, or `--force` when you want a different launcher name, location, or replacement behavior.
 
 For the normal local loop without installing a launcher:
 
@@ -83,6 +83,7 @@ Then use this sequence inside the client:
 
 ```text
 hi!
+/dashboard
 /kimi
 /model kimi-k2.5
 chat --image ./diagram.png inspect this screenshot
@@ -93,7 +94,9 @@ resume active --image ./diagram-2.png continue from the last tool result
 
 That gives one compact flow for daily use:
 
+- `pikachu` now starts in a compact chat view instead of dumping the full session board on every frame.
 - plain text now uses the chat path by default, so typing `hi!` behaves like a prompt instead of an unknown command error.
+- `/dashboard` switches back to the full session board when you want the heavier inspection view.
 - direct slash aliases like `/kimi`, `/glm`, `/nim`, and `/generic` choose the provider in one token.
 - slash control aliases like `/provider ...`, `/model ...`, `/base-url ...`, `/tools ...`, `/probe`, `/help`, and `/quit` still reuse the same thin-client command path when you want terminal-chat style controls.
 - `chat --image ...` and `resume ... --image ...` let the TUI drive the same multimodal path as the CLI without inventing a second provider boundary.

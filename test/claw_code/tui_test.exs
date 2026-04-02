@@ -91,6 +91,58 @@ defmodule ClawCode.TUITest do
     assert output =~ "assistant: world"
   end
 
+  test "render in chat view focuses on the selected conversation" do
+    session = %{
+      "id" => "session-chat",
+      "updated_at" => "2026-04-02T00:00:00Z",
+      "provider" => %{"provider" => "glm", "model" => "GLM-4.7"},
+      "prompt" => "hi!",
+      "output" => "hello there",
+      "stop_reason" => "completed",
+      "run_state" => %{"status" => "idle", "last_stop_reason" => "completed"},
+      "messages" => [
+        %{"role" => "user", "content" => "hi!"},
+        %{"role" => "assistant", "content" => "hello there"}
+      ],
+      "tool_receipts" => []
+    }
+
+    state = %State{
+      opts: [provider: "glm"],
+      view_mode: :chat,
+      daemon_status: %{"status" => "running"},
+      doctor: %{
+        provider: "glm",
+        model: %{value: "GLM-5.1"},
+        tool_policy: :auto,
+        configured: true,
+        auth_mode: "required",
+        tool_support: "full",
+        input_modalities: ["text", "image"],
+        missing: []
+      },
+      all_sessions: [session],
+      sessions: [session],
+      session_filter: :all,
+      session_limit: 8,
+      session_root: "/tmp/claw",
+      selected_session_id: "session-chat",
+      selected_session: session,
+      notice: "Connected to daemon."
+    }
+
+    output = TUI.render(state)
+
+    assert output =~ "# Pikachu"
+    assert output =~ "provider=glm model=GLM-5.1 health=ready daemon=running tools=auto"
+    assert output =~ "selected=session-chat session_provider=glm/GLM-4.7 run=idle stop=completed"
+    assert output =~ "## Conversation"
+    assert output =~ "1. user: hi!"
+    assert output =~ "2. assistant: hello there"
+    refute output =~ "## Sessions"
+    refute output =~ "## Selected"
+  end
+
   test "render summarizes multimodal user content in the selected transcript" do
     session = %{
       "id" => "session-image",
@@ -954,6 +1006,35 @@ defmodule ClawCode.TUITest do
     {:continue, cleared_state} = TUI.apply_command(tool_state, "/clear base-url")
     refute Keyword.has_key?(cleared_state.opts, :base_url)
     assert cleared_state.notice =~ "cleared"
+  end
+
+  test "view commands switch between chat and dashboard modes" do
+    state = %State{
+      opts: [provider: "generic"],
+      view_mode: :chat,
+      daemon_status: %{"status" => "unknown", "session_root" => System.tmp_dir!()},
+      doctor: %{
+        provider: "generic",
+        model: %{value: "test-model"},
+        base_url: %{value: nil},
+        tool_policy: :auto
+      },
+      all_sessions: [],
+      sessions: [],
+      session_filter: :all,
+      session_limit: 8,
+      session_root: System.tmp_dir!(),
+      selected_session_id: nil,
+      selected_session: nil
+    }
+
+    {:continue, dashboard_state} = TUI.apply_command(state, "/dashboard")
+    assert dashboard_state.view_mode == :dashboard
+    assert dashboard_state.notice =~ "dashboard"
+
+    {:continue, chat_state} = TUI.apply_command(dashboard_state, "view chat")
+    assert chat_state.view_mode == :chat
+    assert chat_state.notice =~ "chat"
   end
 
   test "direct slash provider aliases choose providers in one token" do

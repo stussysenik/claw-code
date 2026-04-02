@@ -186,6 +186,13 @@ The TUI MUST cover the normal local operator loop without becoming a second runt
 - **THEN** the client sends that text through the normal daemon or runtime chat path
 - **AND** slash-prefixed input remains reserved for local control commands
 
+#### Scenario: The default TUI view is compact and chat-first
+
+- **GIVEN** the operator launches `pikachu` or `./claw_code tui`
+- **WHEN** the client starts
+- **THEN** it opens in a compact conversation-first view instead of dumping the full session board
+- **AND** the heavier session or health board remains explicitly reachable through a local control like `/dashboard`
+
 ### Requirement: Stable Local Launcher
 
 `claw_code` MUST provide an installable local launcher so the operator can enter the TUI and CLI loop from `PATH` without repo-specific shell glue.

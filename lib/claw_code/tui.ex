@@ -8,6 +8,7 @@ defmodule ClawCode.TUI do
   defmodule State do
     @enforce_keys [:opts]
     defstruct opts: [],
+              view_mode: :dashboard,
               daemon_status: %{},
               doctor: %{},
               all_sessions: [],
@@ -33,6 +34,7 @@ defmodule ClawCode.TUI do
     with {:ok, daemon_status, notice} <- ensure_daemon(opts) do
       opts
       |> build_state(daemon_status, notice)
+      |> Map.put(:view_mode, :chat)
       |> loop()
     end
   end
@@ -55,6 +57,7 @@ defmodule ClawCode.TUI do
     follow_target = normalize_follow_target(Map.get(ui, :follow_target))
     transcript_query = normalize_transcript_query(Map.get(ui, :transcript_query))
     transcript_match_index = Map.get(ui, :transcript_match_index, 0)
+    view_mode = normalize_view_mode(Map.get(ui, :view_mode, :dashboard))
 
     {all_sessions, resolved_session_offset, session_total, older_sessions_available,
      newer_sessions_available} =
@@ -66,6 +69,7 @@ defmodule ClawCode.TUI do
 
     %State{
       opts: opts,
+      view_mode: view_mode,
       daemon_status: daemon_status,
       doctor: Manifest.doctor_payload(opts),
       all_sessions: all_sessions,
@@ -227,6 +231,9 @@ defmodule ClawCode.TUI do
       <<"tools ", mode::binary>> ->
         set_tool_mode(state, mode)
 
+      <<"view ", mode::binary>> ->
+        set_view_mode(state, mode)
+
       other ->
         if String.starts_with?(raw_input, "/") do
           {:continue, %{state | notice: "Unknown command: #{raw_input}. Type `help`."}}
@@ -241,6 +248,12 @@ defmodule ClawCode.TUI do
       provider when provider in ["generic", "glm", "kimi", "nim"] ->
         "provider " <> provider
 
+      "dashboard" ->
+        "view dashboard"
+
+      "chat-view" ->
+        "view chat"
+
       value ->
         String.trim_leading(value)
     end
@@ -249,6 +262,13 @@ defmodule ClawCode.TUI do
   defp normalize_command_alias(value), do: value
 
   def render(%State{} = state) do
+    case state.view_mode do
+      :chat -> render_chat_view(state)
+      _other -> render_dashboard_view(state)
+    end
+  end
+
+  defp render_dashboard_view(%State{} = state) do
     [
       "# Claw Code TUI",
       "",
@@ -280,6 +300,24 @@ defmodule ClawCode.TUI do
       "",
       "## Commands",
       render_command_summary(" | ")
+    ]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join("\n")
+  end
+
+  defp render_chat_view(%State{} = state) do
+    [
+      "# Pikachu",
+      "",
+      compact_status_line(state),
+      compact_selected_line(state),
+      if(state.notice, do: "notice=#{state.notice}"),
+      "",
+      "## Conversation",
+      render_chat_transcript(state),
+      "",
+      "## Controls",
+      "plain text sends chat; /dashboard shows the full session board; /glm /nim /kimi /generic switch provider; /model ... /probe /quit"
     ]
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join("\n")
@@ -562,6 +600,19 @@ defmodule ClawCode.TUI do
     end
   end
 
+  defp set_view_mode(%State{} = state, value) do
+    case normalize_view_mode(String.trim(String.downcase(value))) do
+      :chat ->
+        {:continue, %{state | view_mode: :chat, notice: "View set to chat."}}
+
+      :dashboard ->
+        {:continue, %{state | view_mode: :dashboard, notice: "View set to dashboard."}}
+
+      nil ->
+        {:continue, %{state | notice: "Unknown view mode: #{String.trim(value)}"}}
+    end
+  end
+
   defp set_provider(%State{} = state, value) do
     provider =
       value
@@ -840,6 +891,7 @@ defmodule ClawCode.TUI do
 
   defp ui_state(%State{} = state) do
     %{
+      view_mode: state.view_mode || :dashboard,
       session_filter: state.session_filter || :all,
       session_query: state.session_query,
       session_limit: state.session_limit || 8,
@@ -1109,6 +1161,28 @@ defmodule ClawCode.TUI do
     end
   end
 
+  defp compact_status_line(%State{} = state) do
+    "provider=#{state.doctor[:provider] || "unknown"} model=#{nested_value(state.doctor, [:model, :value]) || "missing"} health=#{provider_health_summary(state.doctor)} daemon=#{state.daemon_status["status"] || "unknown"} tools=#{state.doctor[:tool_policy] || :auto}"
+  end
+
+  defp compact_selected_line(%State{selected_session: nil}), do: "selected=new"
+
+  defp compact_selected_line(%State{} = state) do
+    session = state.selected_session
+
+    "selected=#{session["id"]} session_provider=#{session_provider(session)}/#{get_in(session, ["provider", "model"]) || "-"} run=#{get_in(session, ["run_state", "status"]) || "unknown"} stop=#{session["stop_reason"] || "unknown"}"
+  end
+
+  defp render_chat_transcript(%State{selected_session: nil}), do: "  no session selected yet"
+
+  defp render_chat_transcript(%State{} = state) do
+    render_messages(
+      state.selected_session["messages"] || [],
+      state.transcript_query,
+      state.transcript_match_index
+    )
+  end
+
   defp help_text do
     "Commands: " <> render_command_summary(", ")
   end
@@ -1143,16 +1217,22 @@ defmodule ClawCode.TUI do
       "newer",
       "provider <name|default>",
       "model <name|default>",
+      "view <chat|dashboard>",
       "base-url <url>",
       "clear base-url",
       "tools auto|on|off",
-      "slash aliases: /provider /glm /nim /kimi /generic /model /base-url /clear /tools /probe /help /quit",
+      "slash aliases: /dashboard /provider /glm /nim /kimi /generic /model /base-url /clear /tools /probe /help /quit",
       "probe",
       "refresh",
       "help",
       "quit"
     ]
   end
+
+  defp normalize_view_mode(value) when value in [:chat, :dashboard], do: value
+  defp normalize_view_mode("chat"), do: :chat
+  defp normalize_view_mode("dashboard"), do: :dashboard
+  defp normalize_view_mode(_value), do: nil
 
   defp parse_prompt_spec(value) when is_binary(value) do
     value

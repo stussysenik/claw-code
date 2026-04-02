@@ -56,6 +56,7 @@
 - [x] Add a stable local launcher install path so the tool can be launched from `PATH` and open the TUI by default with one command.
 - [x] Add slash aliases for common TUI provider and tool controls without widening the client boundary.
 - [x] Make plain text input in the TUI use the chat path by default so command mode does not block normal conversation.
+- [x] Make the default TUI startup view compact and chat-first, with the full board available explicitly.
 
 ## Phase 5: Long-Run Operations
 
