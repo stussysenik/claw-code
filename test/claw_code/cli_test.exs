@@ -9,7 +9,7 @@ defmodule ClawCode.CLITest do
     assert output =~ "# Claw Code Elixir"
   end
 
-  test "install creates a stable launcher that opens the TUI by default" do
+  test "install defaults to a pikachu launcher that opens the TUI" do
     root = Path.join(System.tmp_dir!(), "claw-code-cli-install-#{SessionStore.new_id()}")
     bin_dir = Path.join(root, "bin")
     source_path = Path.join(root, "claw_code")
@@ -38,14 +38,14 @@ defmodule ClawCode.CLITest do
 
     output =
       capture_io(fn ->
-        assert CLI.run(["install", "--as", "claw", "--bin-dir", bin_dir]) == 0
+        assert CLI.run(["install", "--bin-dir", bin_dir]) == 0
       end)
 
-    launcher_path = Path.join(bin_dir, "claw")
+    launcher_path = Path.join(bin_dir, "pikachu")
     launcher = File.read!(launcher_path)
 
     assert output =~ "# Install"
-    assert output =~ "- launcher: claw"
+    assert output =~ "- launcher: pikachu"
     assert output =~ "- default_command: tui"
     assert output =~ "- path_status: missing"
     assert output =~ "- shell_snippet: export PATH=\"#{bin_dir}:$PATH\""
@@ -64,7 +64,7 @@ defmodule ClawCode.CLITest do
       Path.join(System.tmp_dir!(), "claw-code-cli-install-conflict-#{SessionStore.new_id()}")
 
     bin_dir = Path.join(root, "bin")
-    launcher_path = Path.join(bin_dir, "claw")
+    launcher_path = Path.join(bin_dir, "pikachu")
     source_path = Path.join(root, "claw_code")
     previous_install_source = System.get_env("CLAW_INSTALL_SOURCE")
 
@@ -82,7 +82,7 @@ defmodule ClawCode.CLITest do
 
     output =
       capture_io(fn ->
-        assert CLI.run(["install", "--as", "claw", "--bin-dir", bin_dir]) == 1
+        assert CLI.run(["install", "--bin-dir", bin_dir]) == 1
       end)
 
     assert output =~ "Launcher already exists"
@@ -94,7 +94,7 @@ defmodule ClawCode.CLITest do
       Path.join(System.tmp_dir!(), "claw-code-cli-install-force-#{SessionStore.new_id()}")
 
     bin_dir = Path.join(root, "bin")
-    launcher_path = Path.join(bin_dir, "claw")
+    launcher_path = Path.join(bin_dir, "pikachu")
     source_path = Path.join(root, "claw_code")
     previous_install_source = System.get_env("CLAW_INSTALL_SOURCE")
 
@@ -120,7 +120,7 @@ defmodule ClawCode.CLITest do
 
     output =
       capture_io(fn ->
-        assert CLI.run(["install", "--force", "--as", "claw", "--bin-dir", bin_dir]) == 0
+        assert CLI.run(["install", "--force", "--bin-dir", bin_dir]) == 0
       end)
 
     assert output =~ "- action: replaced"

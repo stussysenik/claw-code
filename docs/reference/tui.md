@@ -61,11 +61,11 @@ For one stable shell launcher instead of running `./claw_code` from the repo roo
 
 ```bash
 mix escript.build
-./claw_code install --as claw
-claw
+./claw_code install
+pikachu
 ```
 
-The installed launcher opens the TUI by default with no arguments and still forwards explicit subcommands like `claw chat ...` or `claw daemon start`. Use `./claw_code install --as snik`, `--bin-dir /custom/path`, or `--force` when you want a different launcher name, location, or replacement behavior.
+The installed launcher opens the TUI by default with no arguments and still forwards explicit subcommands like `pikachu chat ...` or `pikachu daemon start`. Use `./claw_code install --as snik`, `--bin-dir /custom/path`, or `--force` when you want a different launcher name, location, or replacement behavior.
 
 For the normal local loop without installing a launcher:
 
@@ -84,6 +84,7 @@ Then use this sequence inside the client:
 ```text
 focus active
 inspect failed
+/provider kimi
 chat --image ./diagram.png inspect this screenshot
 resume active --image ./diagram-2.png continue from the last tool result
 cancel active
@@ -93,6 +94,7 @@ That gives one compact flow for daily use:
 
 - `focus active` narrows the list to running work, enables `follow=running`, and turns on a 1s watch cadence.
 - `inspect failed` jumps directly to the latest failed session when you need to inspect the last breakage.
+- slash aliases like `/provider ...`, `/model ...`, `/base-url ...`, `/tools ...`, `/probe`, `/help`, and `/quit` reuse the same thin-client command path when you want terminal-chat style controls.
 - `chat --image ...` and `resume ... --image ...` let the TUI drive the same multimodal path as the CLI without inventing a second provider boundary.
 - start the client with `--vision-*` flags when the primary reasoning model should stay text-only and a separate vision-capable backbone should handle image understanding.
 - `older` and `newer` move the loaded page through larger session roots while keeping the same thin-client state path.

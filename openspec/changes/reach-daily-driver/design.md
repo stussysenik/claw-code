@@ -144,7 +144,7 @@ Required outputs:
 - multimodal `chat` and `resume` forwarding that stays inside the thin-client daemon/runtime path
 - session and transcript navigation that stays fast as the session root grows
 - a stable launcher install path that lets the operator open the TUI from `PATH` without repo-specific wrappers
-- a small set of keyboard-friendly or alias-friendly workflows that cover most daily use
+- a small set of keyboard-friendly or alias-friendly workflows, including slash-style control aliases, that cover most daily use
 
 Suggested Ralph loop:
 

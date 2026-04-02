@@ -172,6 +172,13 @@ The TUI MUST cover the normal local operator loop without becoming a second runt
 - **THEN** the header or footer exposes provider/model/tool-policy plus compact provider-health and selected-session-health summaries
 - **AND** the UI still relies on runtime-derived state instead of duplicating provider logic
 
+#### Scenario: Use slash aliases for common local TUI controls
+
+- **GIVEN** the operator is already inside `./claw_code tui`
+- **WHEN** they type slash-style controls like `/provider kimi`, `/model kimi-k2.5`, or `/tools off`
+- **THEN** the client routes them through the same existing thin-client command surface
+- **AND** slash aliases do not create a second provider or runtime control path
+
 ### Requirement: Stable Local Launcher
 
 `claw_code` MUST provide an installable local launcher so the operator can enter the TUI and CLI loop from `PATH` without repo-specific shell glue.

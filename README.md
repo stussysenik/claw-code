@@ -138,27 +138,27 @@ When you want one stable shell command instead of running from the repo root eve
 
 ```bash
 mix escript.build
-./claw_code install --as claw
+./claw_code install
 ```
 
-That writes a launcher to `~/.local/bin/claw` by default. If that directory is not already in `PATH`, add the snippet the installer prints:
+That writes a launcher to `~/.local/bin/pikachu` by default. If that directory is not already in `PATH`, add the snippet the installer prints:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-After that, `claw` becomes the entrypoint:
+After that, `pikachu` becomes the entrypoint:
 
 ```bash
-claw
-claw chat --provider glm --model GLM-5.1 --no-tools "say hello"
-claw daemon start
-claw providers
+pikachu
+pikachu chat --provider glm --model GLM-5.1 --no-tools "say hello"
+pikachu daemon start
+pikachu providers
 ```
 
 The installed launcher opens the TUI by default when you call it with no arguments, and forwards every explicit subcommand to the underlying `claw_code` escript.
 
-Use `./claw_code install --as snik`, `./claw_code install --bin-dir /custom/path`, or `./claw_code install --force` when you want a different launcher name, location, or replacement behavior.
+Use `./claw_code install --as snik`, `./claw_code install --as pikachu`, `./claw_code install --bin-dir /custom/path`, or `./claw_code install --force` when you want a different launcher name, location, or replacement behavior.
 
 ## Session Resume
 

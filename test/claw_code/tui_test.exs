@@ -920,6 +920,42 @@ defmodule ClawCode.TUITest do
     assert default_model_state.notice =~ "default"
   end
 
+  test "slash command aliases update local provider controls" do
+    state = %State{
+      opts: [provider: "generic"],
+      daemon_status: %{"status" => "unknown", "session_root" => System.tmp_dir!()},
+      doctor: %{
+        provider: "generic",
+        model: %{value: "test-model"},
+        base_url: %{value: nil},
+        tool_policy: :auto
+      },
+      all_sessions: [],
+      sessions: [],
+      session_filter: :all,
+      session_limit: 8,
+      session_root: System.tmp_dir!(),
+      selected_session_id: nil,
+      selected_session: nil
+    }
+
+    {:continue, provider_state} = TUI.apply_command(state, "/provider kimi")
+    assert provider_state.opts[:provider] == "kimi"
+    assert provider_state.notice =~ "Provider set to kimi."
+
+    {:continue, model_state} = TUI.apply_command(provider_state, "/model kimi-k2.5")
+    assert model_state.opts[:model] == "kimi-k2.5"
+    assert model_state.notice =~ "Model set to kimi-k2.5."
+
+    {:continue, tool_state} = TUI.apply_command(model_state, "/tools off")
+    assert tool_state.opts[:tools] == false
+    assert tool_state.notice =~ "disabled"
+
+    {:continue, cleared_state} = TUI.apply_command(tool_state, "/clear base-url")
+    refute Keyword.has_key?(cleared_state.opts, :base_url)
+    assert cleared_state.notice =~ "cleared"
+  end
+
   test "base-url commands update and clear the local endpoint" do
     state = %State{
       opts: [provider: "generic"],

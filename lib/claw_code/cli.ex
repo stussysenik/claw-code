@@ -51,7 +51,7 @@ defmodule ClawCode.CLI do
     daemon_timeout_ms: :integer
   ]
 
-  @default_launcher "claw"
+  @default_launcher "pikachu"
   @default_bin_dir "~/.local/bin"
 
   def main(argv) do

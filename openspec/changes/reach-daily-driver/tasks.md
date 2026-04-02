@@ -54,6 +54,7 @@
 - [x] Add one compact "operator quickstart" flow in the TUI docs for normal daily use.
 - [x] Keep all new TUI behavior behind the thin-client rule and prove it with tests.
 - [x] Add a stable local launcher install path so the tool can be launched from `PATH` and open the TUI by default with one command.
+- [x] Add slash aliases for common TUI provider and tool controls without widening the client boundary.
 
 ## Phase 5: Long-Run Operations
 

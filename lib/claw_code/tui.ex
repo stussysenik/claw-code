@@ -119,7 +119,7 @@ defmodule ClawCode.TUI do
   end
 
   def apply_command(%State{} = state, input) when is_binary(input) do
-    case String.trim(input) do
+    case normalize_command_alias(String.trim(input)) do
       "" ->
         refresh(state, nil)
 
@@ -230,6 +230,9 @@ defmodule ClawCode.TUI do
     end
   end
 
+  defp normalize_command_alias("/" <> rest), do: String.trim_leading(rest)
+  defp normalize_command_alias(value), do: value
+
   def render(%State{} = state) do
     [
       "# Claw Code TUI",
@@ -275,7 +278,7 @@ defmodule ClawCode.TUI do
   defp loop(%State{} = state, input_reader) do
     IO.write(IO.ANSI.home() <> IO.ANSI.clear())
     IO.puts(render(state))
-    IO.write("\nclaw> ")
+    IO.write("\npikachu> ")
 
     case next_loop_event(input_reader, state.watch_interval_ms) do
       {:input, nil} ->
@@ -1128,6 +1131,7 @@ defmodule ClawCode.TUI do
       "base-url <url>",
       "clear base-url",
       "tools auto|on|off",
+      "slash aliases: /provider /model /base-url /clear /tools /probe /help /quit",
       "probe",
       "refresh",
       "help",
