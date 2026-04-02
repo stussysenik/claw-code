@@ -3,7 +3,7 @@ defmodule ClawCode.ProviderTest do
 
   alias ClawCode.Providers.OpenAICompatible
 
-  test "glm config uses the official coding endpoint and default model" do
+  test "glm config uses the official coding endpoint and defaults to GLM-5.1" do
     with_env(
       %{
         "GLM_BASE_URL" => nil,
@@ -21,7 +21,7 @@ defmodule ClawCode.ProviderTest do
 
         assert config.provider == "glm"
         assert config.base_url == "https://open.bigmodel.cn/api/coding/paas/v4"
-        assert config.model == "GLM-4.7"
+        assert config.model == "GLM-5.1"
         assert config.api_key == "glm-test-key"
       end
     )

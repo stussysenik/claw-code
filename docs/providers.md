@@ -241,7 +241,7 @@ CLAW_MODEL="gpt-4.1-mini" \
 - Default base URL: `https://open.bigmodel.cn/api/coding/paas/v4`
 - Env vars:
 - `GLM_API_KEY` or `BIGMODEL_API_KEY`
-- `GLM_MODEL` default: `GLM-4.7`
+- `GLM_MODEL` default: `GLM-5.1`
 - Optional overrides: `GLM_BASE_URL`, `BIGMODEL_BASE_URL`
 - As of 2026-04-01, the live multimodal path proven in this repo is `GLM-4.6V` on the coding endpoint. `GLM-4.5V` also passed `probe` with local image input, while `GLM-4.7` returned a 400 on image input and `GLM-5` returned a 429 plan-access error in this environment.
 - As of 2026-04-01, BigModel publishes a dedicated `GLM-5.1` coding-plan path, and that makes `GLM-5.1` the current preferred reasoning-side target when you want a stronger reasoning model plus a separate vision-capable backbone.
@@ -252,7 +252,7 @@ CLAW_MODEL="gpt-4.1-mini" \
 ```bash
 CLAW_PROVIDER=glm \
 GLM_API_KEY="..." \
-GLM_MODEL="GLM-4.7" \
+GLM_MODEL="GLM-5.1" \
 ./scripts/qa.sh provider "say hello and report the configured provider"
 
 ./claw_code probe --provider glm --model GLM-4.6V --image ./diagram.png

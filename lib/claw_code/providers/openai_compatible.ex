@@ -349,7 +349,7 @@ defmodule ClawCode.Providers.OpenAICompatible do
 
   def default_api_key_header(_provider), do: "authorization"
 
-  def default_model("glm"), do: "GLM-4.7"
+  def default_model("glm"), do: "GLM-5.1"
   def default_model("nim"), do: "meta/llama-3.1-8b-instruct"
   def default_model("kimi"), do: "kimi-k2.5"
   def default_model(_provider), do: nil
