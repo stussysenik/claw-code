@@ -119,7 +119,9 @@ defmodule ClawCode.TUI do
   end
 
   def apply_command(%State{} = state, input) when is_binary(input) do
-    case normalize_command_alias(String.trim(input)) do
+    raw_input = String.trim(input)
+
+    case normalize_command_alias(raw_input) do
       "" ->
         refresh(state, nil)
 
@@ -226,11 +228,24 @@ defmodule ClawCode.TUI do
         set_tool_mode(state, mode)
 
       other ->
-        {:continue, %{state | notice: "Unknown command: #{other}. Type `help`."}}
+        if String.starts_with?(raw_input, "/") do
+          {:continue, %{state | notice: "Unknown command: #{raw_input}. Type `help`."}}
+        else
+          send_chat(state, other, false)
+        end
     end
   end
 
-  defp normalize_command_alias("/" <> rest), do: String.trim_leading(rest)
+  defp normalize_command_alias("/" <> rest) do
+    case String.trim(rest) do
+      provider when provider in ["generic", "glm", "kimi", "nim"] ->
+        "provider " <> provider
+
+      value ->
+        String.trim_leading(value)
+    end
+  end
+
   defp normalize_command_alias(value), do: value
 
   def render(%State{} = state) do
@@ -1131,7 +1146,7 @@ defmodule ClawCode.TUI do
       "base-url <url>",
       "clear base-url",
       "tools auto|on|off",
-      "slash aliases: /provider /model /base-url /clear /tools /probe /help /quit",
+      "slash aliases: /provider /glm /nim /kimi /generic /model /base-url /clear /tools /probe /help /quit",
       "probe",
       "refresh",
       "help",

@@ -160,6 +160,8 @@ The installed launcher opens the TUI by default when you call it with no argumen
 
 Use `./claw_code install --as snik`, `./claw_code install --as pikachu`, `./claw_code install --bin-dir /custom/path`, or `./claw_code install --force` when you want a different launcher name, location, or replacement behavior.
 
+Inside `pikachu`, plain text now goes through the chat path by default, while slash-prefixed controls like `/kimi`, `/glm`, `/provider kimi`, `/tools off`, `/probe`, and `/quit` stay on the local TUI control surface.
+
 ## Session Resume
 
 Sessions live under `.claw/sessions/` and can be resumed by explicit id.

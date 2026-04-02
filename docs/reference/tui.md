@@ -82,19 +82,20 @@ For split reasoning plus vision:
 Then use this sequence inside the client:
 
 ```text
-focus active
-inspect failed
-/provider kimi
+hi!
+/kimi
+/model kimi-k2.5
 chat --image ./diagram.png inspect this screenshot
 resume active --image ./diagram-2.png continue from the last tool result
-cancel active
+/tools off
+/quit
 ```
 
 That gives one compact flow for daily use:
 
-- `focus active` narrows the list to running work, enables `follow=running`, and turns on a 1s watch cadence.
-- `inspect failed` jumps directly to the latest failed session when you need to inspect the last breakage.
-- slash aliases like `/provider ...`, `/model ...`, `/base-url ...`, `/tools ...`, `/probe`, `/help`, and `/quit` reuse the same thin-client command path when you want terminal-chat style controls.
+- plain text now uses the chat path by default, so typing `hi!` behaves like a prompt instead of an unknown command error.
+- direct slash aliases like `/kimi`, `/glm`, `/nim`, and `/generic` choose the provider in one token.
+- slash control aliases like `/provider ...`, `/model ...`, `/base-url ...`, `/tools ...`, `/probe`, `/help`, and `/quit` still reuse the same thin-client command path when you want terminal-chat style controls.
 - `chat --image ...` and `resume ... --image ...` let the TUI drive the same multimodal path as the CLI without inventing a second provider boundary.
 - start the client with `--vision-*` flags when the primary reasoning model should stay text-only and a separate vision-capable backbone should handle image understanding.
 - `older` and `newer` move the loaded page through larger session roots while keeping the same thin-client state path.

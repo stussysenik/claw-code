@@ -179,6 +179,13 @@ The TUI MUST cover the normal local operator loop without becoming a second runt
 - **THEN** the client routes them through the same existing thin-client command surface
 - **AND** slash aliases do not create a second provider or runtime control path
 
+#### Scenario: Plain text input defaults to chat in the TUI
+
+- **GIVEN** the operator is already inside `./claw_code tui`
+- **WHEN** they type a normal prompt like `hi!` instead of an explicit control command
+- **THEN** the client sends that text through the normal daemon or runtime chat path
+- **AND** slash-prefixed input remains reserved for local control commands
+
 ### Requirement: Stable Local Launcher
 
 `claw_code` MUST provide an installable local launcher so the operator can enter the TUI and CLI loop from `PATH` without repo-specific shell glue.

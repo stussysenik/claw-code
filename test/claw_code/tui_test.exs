@@ -956,6 +956,36 @@ defmodule ClawCode.TUITest do
     assert cleared_state.notice =~ "cleared"
   end
 
+  test "direct slash provider aliases choose providers in one token" do
+    state = %State{
+      opts: [provider: "generic"],
+      daemon_status: %{"status" => "unknown", "session_root" => System.tmp_dir!()},
+      doctor: %{
+        provider: "generic",
+        model: %{value: "test-model"},
+        base_url: %{value: nil},
+        tool_policy: :auto
+      },
+      all_sessions: [],
+      sessions: [],
+      session_filter: :all,
+      session_limit: 8,
+      session_root: System.tmp_dir!(),
+      selected_session_id: nil,
+      selected_session: nil
+    }
+
+    {:continue, kimi_state} = TUI.apply_command(state, "/kimi")
+    assert kimi_state.opts[:provider] == "kimi"
+    assert kimi_state.doctor.provider == "kimi"
+    assert kimi_state.notice =~ "Provider set to kimi."
+
+    {:continue, glm_state} = TUI.apply_command(kimi_state, "/glm")
+    assert glm_state.opts[:provider] == "glm"
+    assert glm_state.doctor.provider == "glm"
+    assert glm_state.notice =~ "Provider set to glm."
+  end
+
   test "base-url commands update and clear the local endpoint" do
     state = %State{
       opts: [provider: "generic"],
@@ -1023,6 +1053,66 @@ defmodule ClawCode.TUITest do
 
     {:continue, next_state} = TUI.apply_command(state, "chat --image")
     assert next_state.notice =~ "Image path is required"
+  end
+
+  test "plain text input uses the chat path instead of reporting unknown command" do
+    daemon_root = tmp_path("tui-plain-text-chat")
+    session_root = tmp_path("tui-plain-text-chat-sessions")
+
+    File.rm_rf(daemon_root)
+    File.rm_rf(session_root)
+
+    {base_url, listener, server} =
+      start_stub_server([
+        Jason.encode!(%{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "hello from tui"}}]
+        })
+      ])
+
+    task = start_daemon(daemon_root, session_root: session_root)
+
+    on_exit(fn ->
+      send(server, :stop)
+      :gen_tcp.close(listener)
+      _ = Daemon.stop(daemon_root: daemon_root)
+      if Process.alive?(task.pid), do: Process.exit(task.pid, :kill)
+      File.rm_rf(daemon_root)
+      File.rm_rf(session_root)
+    end)
+
+    state = %State{
+      opts: [
+        daemon_root: daemon_root,
+        session_root: session_root,
+        provider: "generic",
+        base_url: base_url,
+        api_key: "test-key",
+        model: "test-model",
+        native: false
+      ],
+      daemon_status: %{"status" => "running", "session_root" => session_root},
+      doctor: %{
+        provider: "generic",
+        model: %{value: "test-model"},
+        base_url: %{value: base_url},
+        tool_policy: :auto
+      },
+      all_sessions: [],
+      sessions: [],
+      session_filter: :all,
+      session_limit: 8,
+      session_root: session_root,
+      selected_session_id: nil,
+      selected_session: nil
+    }
+
+    {:continue, next_state} = TUI.apply_command(state, "hi!")
+    assert next_state.notice =~ "Completed completed for"
+    refute next_state.notice =~ "Unknown command"
+
+    session = SessionStore.load(next_state.selected_session_id, root: session_root)
+    assert session["prompt"] == "hi!"
+    assert session["output"] == "hello from tui"
   end
 
   test "resume requires a selected session" do
